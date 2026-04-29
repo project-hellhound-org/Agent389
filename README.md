@@ -72,6 +72,8 @@ agent389 https://target-app.internal --threads 10 --budget 1000
 
 - **Abinav3ac** (Lead Contributor & Architect)
 
+See the full list of [Contributors](CONTRIBUTORS.md).
+
 ---
 
 ## Author & License
