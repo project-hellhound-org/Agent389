@@ -73,12 +73,12 @@ def run_task(text, cmd):
 
 def print_banner():
     art = r"""
-  ____  _____                             
- |  _ \(_|  _ \ ___   __ _ _   _  ___ 
- | | | | | |_) / _ \ / _` | | | |/ _ \
- | |_| | |  _ < (_) | (_| | |_| |  __/
- |____/|_|_| \_\___/ \__, |\__,_|\___|
-                     |___/             
+     _                    _  _____  ___  ___  
+    / \   __ _  ___ _ __ | |_|___ / ( _ )/ _ \ 
+   / _ \ / _` |/ _ \ '_ \| __| |_ \ / _ \ (_) |
+  / ___ \ (_| |  __/ | | | |_ ___) | (_) \__, |
+ /_/   \_\__, |\___|_| |_|\__|____/ \___/  /_/ 
+         |___/                                 
 """
     console.print("\n")
     console.print(Align.center(Text(art, style="bold white")))
@@ -110,7 +110,7 @@ def main():
 
     console.print("\n")
     console.print(Rule(style="dim cyan"))
-    console.print(Align.center(Text("DIRROGUE HAS BEEN RE-ARMED", style="bold white")))
+    console.print(Align.center(Text("AGENT389 HAS BEEN RE-ARMED", style="bold white")))
     console.print(Align.center(Text("VERSION: 1.0.0-STABLE", style="dim")))
     console.print("\n")
 

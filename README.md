@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="Image/banner.png" alt="DirRogue Banner" width="800">
+  <img src="Image/banner.png" alt="Agent389 Banner" width="800">
 </p>
 
 <p align="center">
@@ -9,17 +9,17 @@
   <img src="https://img.shields.io/badge/Platform-Linux%20%7C%20Windows-lightgrey.svg?style=flat-square" alt="Platform">
 </p>
 
-<h1 align="center">DirRogue</h1>
+<h1 align="center">Agent389</h1>
 
 <p align="center">
-  <b>DirRogue</b> is a high-fidelity, professional LDAP injection and enumeration engine designed for autonomous vulnerability research. It leverages advanced behavioral oracles and polymorphic mutation chains to identify deep-seated directory service flaws while maintaining full operational stealth.
+  <b>Agent389</b> is a professional, high-fidelity LDAP injection and enumeration engine designed for autonomous vulnerability research and exploitation. Inspired by the precision and lethality of tactical operations, Agent389 implements a multi-signal detection pipeline to uncover deep-seated directory service flaws while maintaining full operational stealth.
 </p>
 
 ---
 
 ## Tactical Overview
 
-DirRogue addresses the complexity of modern LDAP-backed web applications by implementing a multi-signal detection pipeline. Unlike traditional scanners, DirRogue correlates timing differentials, boolean response shifts, and out-of-band signals to build a deterministic proof of vulnerability.
+Agent389 addresses the complexity of modern LDAP-backed web applications by implementing an advanced detection pipeline. Unlike traditional scanners, Agent389 correlates timing differentials, boolean response shifts, and out-of-band signals to build a deterministic proof of vulnerability.
 
 ### Key Capabilities
 
@@ -33,7 +33,7 @@ DirRogue addresses the complexity of modern LDAP-backed web applications by impl
 
 ## Technical Specifications
 
-DirRogue is structured as a modular tactical suite, allowing for granular control over the scanning lifecycle:
+Agent389 is structured as a modular tactical suite, allowing for granular control over the scanning lifecycle:
 
 | Module | Functional Responsibility |
 | :--- | :--- |
@@ -49,11 +49,11 @@ DirRogue is structured as a modular tactical suite, allowing for granular contro
 
 ### Initial Setup
 
-To deploy DirRogue in your environment, utilize the integrated professional installer:
+To deploy Agent389 in your environment, utilize the integrated professional installer:
 
 ```bash
-git clone https://github.com/project-hellhound-org/DirRogue.git
-cd DirRogue
+git clone https://github.com/project-hellhound-org/Agent389.git
+cd Agent389
 chmod +x install.sh
 ./install.sh
 ```
@@ -63,37 +63,14 @@ chmod +x install.sh
 Run a tactical scan against a target environment:
 
 ```bash
-dirrogue https://target-app.internal --threads 10 --budget 1000
+agent389 https://target-app.internal --threads 10 --budget 1000
 ```
-
-### Advanced Configuration
-
-| Flag | Impact |
-| :--- | :--- |
-| --auth-url | Define a specific URL for authentication bypass testing. |
-| --collab | Set an external collaborator host for OOB callback detection. |
-| --force-scan | Bypass safety qualifications and scan all identified parameters. |
-| --findings | Specify a custom filename for the tactical JSON findings report. |
 
 ---
 
-## Detailed LDAP Content
+## Contributors
 
-### The Three-Step Verifier
-
-DirRogue implements a proprietary verification method to ensure zero false positives:
-
-1.  **Baseline Collection**: The engine establishes a behavior baseline for the target parameter.
-2.  **Differential Injection**: Submits paired payloads designed to produce opposing logical results (TRUE vs FALSE).
-3.  **Statistical Confirmation**: Analyzes response deltas using binomial distribution testing to confirm significance.
-
-### Polymorphic Mutation
-
-Payloads are dynamically wrapped in mutation chains including:
-- Null-byte injection (%00)
-- Character encoding variations
-- Filter nesting and logical chaining
-- Statistical metacharacter spraying
+- **Abinav3ac** (Lead Contributor & Architect)
 
 ---
 

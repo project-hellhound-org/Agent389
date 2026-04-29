@@ -1,5 +1,5 @@
 #!/bin/bash
-# install.sh — Setup for DirRogue v1.0 [HELLHOUND-class]
+# install.sh — Setup for Agent389 v1.0 [HELLHOUND-class]
 
 # Colors for output
 RED='\033[0;31m'
@@ -8,7 +8,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}[*] Starting DirRogue installation...${NC}"
+echo -e "${BLUE}[*] Starting Agent389 installation...${NC}"
 
 # Check for Python 3
 if ! command -v python3 &> /dev/null; then
@@ -39,34 +39,34 @@ $VENV_PIP install --upgrade pip
 $VENV_PIP install requests beautifulsoup4 rich
 
 # Setup CLI command via wrapper
-echo -e "${BLUE}[*] Creating dirrogue wrapper...${NC}"
-cat <<EOF > dirrogue
+echo -e "${BLUE}[*] Creating agent389 wrapper...${NC}"
+cat <<EOF > agent389
 #!/bin/bash
 REAL_PATH=\$(dirname "\$(readlink -f "\$0")")
-"\$REAL_PATH/.venv/bin/python3" "\$REAL_PATH/dirrogue.py" "\$@"
+"\$REAL_PATH/.venv/bin/python3" "\$REAL_PATH/agent389.py" "\$@"
 EOF
-chmod +x dirrogue
+chmod +x agent389
 
 # Install the package in editable mode within venv
 echo -e "${BLUE}[*] Finalizing setup...${NC}"
 $VENV_PIP install -e .
 
 # Create global symbolic link
-echo -e "${BLUE}[*] Creating global symbolic link in /usr/local/bin/dirrogue...${NC}"
-REAL_WRAPPER_PATH=$(readlink -f "dirrogue")
+echo -e "${BLUE}[*] Creating global symbolic link in /usr/local/bin/agent389...${NC}"
+REAL_WRAPPER_PATH=$(readlink -f "agent389")
 if [ -w "/usr/local/bin" ]; then
-    ln -sf "$REAL_WRAPPER_PATH" /usr/local/bin/dirrogue
+    ln -sf "$REAL_WRAPPER_PATH" /usr/local/bin/agent389
     GLOBAL_OK=1
 else
     echo -e "${YELLOW}[!] Permission denied for /usr/local/bin. Attempting with sudo...${NC}"
-    sudo ln -sf "$REAL_WRAPPER_PATH" /usr/local/bin/dirrogue
+    sudo ln -sf "$REAL_WRAPPER_PATH" /usr/local/bin/agent389
     if [ $? -eq 0 ]; then GLOBAL_OK=1; fi
 fi
 
 if [ $? -eq 0 ] && [ "$GLOBAL_OK" == "1" ]; then
-    echo -e "${GREEN}[+] DirRogue installed successfully!${NC}"
-    echo -e "${YELLOW}[!] You can now run 'dirrogue' from anywhere in your terminal.${NC}"
+    echo -e "${GREEN}[+] Agent389 installed successfully!${NC}"
+    echo -e "${YELLOW}[!] You can now run 'agent389' from anywhere in your terminal.${NC}"
 else
-    echo -e "${GREEN}[+] DirRogue installed locally.${NC}"
-    echo -e "${YELLOW}[!] Global link failed. You can still run it as './dirrogue' or add this directory to your PATH.${NC}"
+    echo -e "${GREEN}[+] Agent389 installed locally.${NC}"
+    echo -e "${YELLOW}[!] Global link failed. You can still run it as './agent389' or add this directory to your PATH.${NC}"
 fi

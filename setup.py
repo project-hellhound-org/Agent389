@@ -1,15 +1,15 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="dirrogue",
+    name="agent389",
     version="1.0",
-    description="DirRogue: Advanced LDAP Injection Security Toolkit [HELLHOUND-class]",
+    description="Agent389: Advanced LDAP Injection Security Toolkit [HELLHOUND-class]",
     author="Abinav3ac",
     packages=find_packages(),
-    py_modules=["dirrogue"],
+    py_modules=["agent389"],
     entry_points={
         "console_scripts": [
-            "dirrogue=dirrogue:main",
+            "agent389=agent389:main",
         ],
     },
     install_requires=[
