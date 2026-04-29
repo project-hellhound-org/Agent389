@@ -1,21 +1,26 @@
-# Contributing to DNwatch
+# Contributing to DirRogue
 
-We're excited that you're interested in contributing to DNwatch!
+Thank you for your interest in contributing to DirRogue. We welcome community involvement to improve the engine's detection capabilities and tactical efficiency.
 
 ## Development Guidelines
 
-1. **Modular Code**: Ensure new logic is placed in the appropriate module under `core/`.
-2. **Type Hinting**: Use Python type hints for all new functions and classes.
-3. **Documentation**: Add docstrings to all public methods and classes.
-4. **Testing**: Run integration tests against a lab environment (e.g., Nexus-Corp) before submitting.
+### Code Standards
+- Maintain modular integrity by isolating new detection logic in the core package.
+- Ensure all new features are compatible with both Linux and Windows environments.
+- Follow PEP 8 standards for Python code formatting.
+- Documentation should be precise, tactical, and devoid of non-essential elements.
 
-## Pull Request Process
-
+### Submission Process
 1. Fork the repository.
-2. Create a new feature branch.
-3. Commit your changes with descriptive messages.
-4. Push to your branch and submit a pull request.
+2. Create a feature branch for your tactical enhancement.
+3. Commit your changes with clear, descriptive messages.
+4. Push to your branch and submit a Pull Request.
 
-## Code of Conduct
+## Security Considerations
+If you discover a security vulnerability within DirRogue itself, please report it privately to the maintainers rather than opening a public issue.
 
-Please be respectful and professional in all interactions.
+## Author Attribution
+All contributions will be credited to the respective authors. Major enhancements may be integrated into the core HELLHOUND tactical unit suite.
+
+---
+**DirRogue Tactical Unit**

@@ -1,15 +1,15 @@
 from setuptools import setup, find_packages
 
 setup(
-    name="dnwatch",
+    name="dirrogue",
     version="1.0",
-    description="DNwatch: Advanced LDAP Injection Security Toolkit [HELLHOUND-class]",
-    author="Hellhound Security",
+    description="DirRogue: Advanced LDAP Injection Security Toolkit [HELLHOUND-class]",
+    author="Abinav3ac",
     packages=find_packages(),
-    py_modules=["dnwatch"],
+    py_modules=["dirrogue"],
     entry_points={
         "console_scripts": [
-            "dnwatch=dnwatch:main",
+            "dirrogue=dirrogue:main",
         ],
     },
     install_requires=[
