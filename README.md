@@ -15,7 +15,7 @@
 
 ---
 
-## ⚡ Tactical Enhancements
+## Tactical Enhancements
 
 | Feature | Description |
 | :--- | :--- |
@@ -49,7 +49,7 @@ dnwatch http://nexus-corp.internal
 dnwatch http://nexus-corp.internal --threads 12 --budget 1500
 ```
 
-## 🛠️ Engine Deep-Dive
+##  Engine Deep-Dive
 
 DNwatch operates through a tiered detection pipeline, ensuring maximum coverage while maintaining a low noise profile:
 
@@ -59,7 +59,7 @@ DNwatch operates through a tiered detection pipeline, ensuring maximum coverage 
 4.  **Phase 4: Deterministic Proof**: Verifies hits using a three-way differential analysis (TRUE, FALSE, and Error states).
 5.  **Phase 5: Reporting**: Generates actionable handoff documents and executive HTML reports.
 
-## 📊 Command Line Interface
+## Command Line Interface
 
 | Flag | Description |
 | :--- | :--- |
@@ -69,10 +69,10 @@ DNwatch operates through a tiered detection pipeline, ensuring maximum coverage 
 | `--force-scan` | Bypass Tier-0 qualification and scan all identified parameters. |
 | `--verbose` | Enable detailed tactical logging for execution tracking. |
 
-## 📜 Disclaimer
+##  Disclaimer
 
 This tool is intended for professional security researchers and authorized penetration testers only. Unauthorized use against targets without explicit permission is strictly prohibited.
 
 <p align="center">
-  Developed with ❤️ by <a href="https://github.com/project-hellhound-org">Project Hellhound</a>
+  Developed by <a href="https://github.com/project-hellhound-org">Project Hellhound</a>
 </p>
