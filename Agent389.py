@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║  LDAPi Detection Agent v15.0  — AUTONOMOUS ADAPTIVE ENGINE                   ║
+║  Agent389 v15.0  — AUTONOMOUS ADAPTIVE ENGINE                   ║
 ║  Enterprise-Grade Detection Engine — ANY-ONE-METHOD Architecture              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 Architecture:
@@ -26,8 +26,8 @@ V15.0 SURGICAL ENHANCEMENTS:
   [E10] Timing disable notification — explicit warning when jitter too high
 
 Output:
-  ldapi_findings.json   — Primary handoff document for exploiter agent
-  ldapi_audit.ndjson    — Sanitized audit trail (no PII/response bodies)
+  agent389_findings.json   — Primary handoff document for exploiter agent
+  agent389_audit.ndjson    — Sanitized audit trail (no PII/response bodies)
 
 !! Authorised security testing only !!
 """
@@ -737,7 +737,7 @@ class ScanConfig:
     # Output
     output_dir:          str            = "."
     findings_file:       str            = ""  # resolved at __post_init__
-    audit_file:          str            = "ldapi_audit.ndjson"
+    audit_file:          str            = "agent389_audit.ndjson"
     checkpoint_file:     str            = "checkpoint.json"
     verbose:             bool           = False
     quiet:               bool           = False
@@ -758,7 +758,7 @@ class ScanConfig:
         """V14: Fix findings_file interpolation + seed RNG from scan_id."""
         if not self.findings_file or "{scan_id}" in self.findings_file:
             sid = self.scan_id or uuid.uuid4().hex[:12]
-            self.findings_file = f"ldapi_findings_{sid}.json"
+            self.findings_file = f"agent389_findings_{sid}.json"
         # Seed RNG from scan_id for reproducible PoC payloads
         if self.scan_id:
             try:
@@ -1057,7 +1057,7 @@ class HandoffFinding:
 class ScanHandoff:
     """
     The complete JSON handoff document.
-    Root object of ldapi_findings.json.
+    Root object of agent389_findings.json.
     """
     schema_version:   str   = "3.0"
     tool:             str   = f"{TOOL_NAME} v{VERSION}"
@@ -1418,7 +1418,7 @@ def build_array_injection_data(ep: Endpoint,
 
 def finding_id() -> str:
     """Generate unique finding identifier."""
-    return f"LDAPi-{uuid.uuid4().hex[:8].upper()}"
+    return f"Agent389-{uuid.uuid4().hex[:8].upper()}"
 
 
 def build_curl_poc(ep: Endpoint, param: str, payload: str,
@@ -9343,7 +9343,7 @@ class HandoffSerializer:
         results = []
         seen_rules: set = set()
         for f in doc.get("findings", []):
-            rule_id = f"LDAPI-{f.get('vulnerability_type','INJECTION').upper().replace(' ','_')[:30]}"
+            rule_id = f"AGENT389-{f.get('vulnerability_type','INJECTION').upper().replace(' ','_')[:30]}"
             if rule_id not in seen_rules:
                 seen_rules.add(rule_id)
                 rules.append({
@@ -9383,7 +9383,7 @@ class HandoffSerializer:
                 "tool": {"driver": {
                     "name": TOOL_NAME, "version": VERSION,
                     "rules": rules,
-                    "informationUri": "https://github.com/ldapi-agent",
+                    "informationUri": "https://github.com/agent389-agent",
                 }},
                 "results": results,
             }]
@@ -11297,7 +11297,7 @@ class HTMLReportGenerator:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LDAPi Report — {tgt}</title>
+<title>Agent389 Report — {tgt}</title>
 <style>
   *{{box-sizing:border-box;margin:0;padding:0}}
   body{{font-family:'Courier New',monospace;background:#0d0d0d;color:#e0e0e0;padding:24px}}
@@ -11315,7 +11315,7 @@ class HTMLReportGenerator:
 </style>
 </head>
 <body>
-<h1>🔍 LDAPi Detection Report v{VERSION}</h1>
+<h1>🔍 Agent389 Detection Report v{VERSION}</h1>
 <div style="color:#555;margin-bottom:20px">
   Target: <span style="color:#0af">{tgt}</span> &nbsp;|&nbsp;
   Scan ID: <span style="color:#555">{h(handoff.scan_id)}</span> &nbsp;|&nbsp;
@@ -11580,7 +11580,7 @@ class FeedbackDrivenDiscovery:
             return score
 
         # Use a benign but distinctive probe value so we can detect reflection
-        probe_val = f"ldapiprobe_{ep.key[:6]}"
+        probe_val = f"agent389probe_{ep.key[:6]}"
         data = {p: (probe_val if i == 0 else safe_val(p))
                 for i, p in enumerate(ep.params[:3])}
 
@@ -11824,7 +11824,7 @@ class TargetProfilerEngine:
         profile = self.TargetProfile()
 
         # ── Probe 1: Input reflection ─────────────────────────────────────────
-        marker  = f"ldapi_probe_{uuid.uuid4().hex[:6]}"
+        marker  = f"agent389_probe_{uuid.uuid4().hex[:6]}"
         data    = build_injection_data(ep, param, marker, self._cfg.deterministic_suffix)
         resp    = self._client.send_endpoint(ep, data, phase="tier0")
         if resp and marker in (resp.text or ""):
@@ -12240,7 +12240,7 @@ class FilterEvasionEncoder:
 class BehavioralFingerprinter:
     """V13 — Benign LDAP-style filter probes to build timing baseline per endpoint."""
     _PROBES = [
-        ("valid_nonexist",  "(uid=nonexistentuser_ldapi_probe)"),
+        ("valid_nonexist",  "(uid=nonexistentuser_agent389_probe)"),
         ("empty",           ""),
         ("wildcard_uid",    "(uid=*)"),
         ("objectclass_any", "(objectClass=*)"),
@@ -12583,7 +12583,7 @@ class LDAPFilterReconstructor:
     Tells the exploiter agent EXACTLY what filter to break.
     """
     _TRUE_MARKERS  = ["*(cn=*)", "*(uid=*)", "*(objectClass=*)"]
-    _FALSE_MARKERS = ["*(cn=\x00NOMATCH__ldapi)", "*(uid=\x00NOMATCH__ldapi)"]
+    _FALSE_MARKERS = ["*(cn=\x00NOMATCH__agent389)", "*(uid=\x00NOMATCH__agent389)"]
     _ATTR_PROBES   = ["uid", "cn", "mail", "sAMAccountName", "userPrincipalName",
                       "memberOf", "objectClass", "employeeID", "department"]
 
@@ -12614,7 +12614,7 @@ class LDAPFilterReconstructor:
             resp_t  = self._client.send_endpoint(ep, data_t, phase="verification")
 
             # FALSE probe for this attr
-            false_pl = f"*({attr}=\x00NOMATCH__ldapi__x00)"
+            false_pl = f"*({attr}=\x00NOMATCH__agent389__x00)"
             data_f   = build_injection_data(ep, param, false_pl,
                                              self._cfg.deterministic_suffix)
             resp_f   = self._client.send_endpoint(ep, data_f, phase="verification")
@@ -12743,9 +12743,9 @@ class CredentialStuffingOracle:
     Works without any error disclosure.
     """
     _KNOWN_INVALID = [
-        ("invalid_user_ldapi_1", "wrong_pass_ldapi_1"),
-        ("invalid_user_ldapi_2", "wrong_pass_ldapi_2"),
-        ("invalid_user_ldapi_3", "wrong_pass_ldapi_3"),
+        ("invalid_user_agent389_1", "wrong_pass_agent389_1"),
+        ("invalid_user_agent389_2", "wrong_pass_agent389_2"),
+        ("invalid_user_agent389_3", "wrong_pass_agent389_3"),
         ("__nobody__",           "nopassword1234"),
         ("zzz_no_such_user",     "zzz_no_such_pass"),
     ]
@@ -13635,7 +13635,7 @@ class ScanOrchestrator:
         ACL: blocks BOTH → it's an access-control rule, not WAF.
         """
         try:
-            benign_url = self._cfg.target.rstrip("/") + "/nonexistent_ldapi_check_v14"
+            benign_url = self._cfg.target.rstrip("/") + "/nonexistent_agent389_check_v14"
             sess = self._client._get_session(AuthState.UNAUTH)
             r1 = sess.get(benign_url, timeout=self._cfg.timeout,
                           verify=self._cfg.verify_ssl, allow_redirects=False)
@@ -14643,9 +14643,9 @@ class ScanOrchestrator:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="ldapi_detect",
+        prog="agent389",
         description=(
-            "LDAPi Detection Agent v10.0 — "
+            "Agent389 v10.0 — "
             "Find -> Verify -> Handoff to Exploiter"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -14741,11 +14741,11 @@ def _parse_args() -> argparse.Namespace:
     out.add_argument("--output-dir", default=".",
                      metavar="DIR")
     out.add_argument("--findings",
-                     default="ldapi_findings.json",
+                     default="agent389_findings.json",
                      metavar="FILE",
                      help="Handoff JSON filename")
     out.add_argument("--audit",
-                     default="ldapi_audit.ndjson",
+                     default="agent389_audit.ndjson",
                      metavar="FILE",
                      help="NDJSON audit log filename")
     out.add_argument("-v", "--verbose", action="store_true")
@@ -14874,3 +14874,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
