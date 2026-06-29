@@ -58,13 +58,83 @@ chmod +x install.sh
 ./install.sh
 ```
 
-### Standard Execution
+---
 
-Run a tactical scan against a target environment:
+## Usage Guide
+
+Agent389 offers a comprehensive set of arguments to tailor your scan to specific target environments, from simple unauthenticated checks to stealthy, stateful WAF-bypassing operations.
+
+### Basic Execution
+
+Run a standard tactical scan against a target environment:
 
 ```bash
 agent389 https://target-app.internal --threads 10 --budget 1000
 ```
+
+### Authentication & Session Management
+
+To test authenticated endpoints, you can supply session credentials, cookies, or headers:
+
+```bash
+# Using raw cookies
+agent389 https://target.com --cookies "session=abc123XYZ; user=admin"
+
+# Using specific headers (e.g. Bearer Token)
+agent389 https://target.com --headers "Authorization:Bearer token123"
+
+# Using Form-based authentication (automatically fetches session)
+agent389 https://target.com --auth-url https://target.com/login --auth-data "username=admin&password=Password123"
+```
+
+### Risk & Intensity Control
+
+Adjust the aggression and invasiveness of the scan:
+
+```bash
+# Risk Level 1: Passive/Error-based and Boolean checks only (Safe)
+agent389 https://target.com --risk 1
+
+# Risk Level 2 (Default): Includes timing-based differential analysis
+agent389 https://target.com --risk 2
+
+# Risk Level 3: Maximum aggression, allows Out-Of-Band (OOB) and Data Extraction
+agent389 https://target.com --risk 3 --extract
+```
+
+### Bypass & WAF Evasion
+
+When encountering modern WAFs (Web Application Firewalls) or strict filtering:
+
+```bash
+# CDN Mode: Increases timing thresholds for environments behind Cloudflare/Akamai
+agent389 https://target.com --cdn-mode
+
+# Polymorphic WAF Bypass: Specify mutation depth for payload shifting
+agent389 https://target.com --poly-depth 5
+
+# Stateful Exploitation: Enable stateful attack chaining and deferred probing
+agent389 https://target.com --stateful --state-delay 3.0
+```
+
+### Complete Argument Reference
+
+| Flag | Category | Description |
+|---|---|---|
+| `--auth-url`, `--auth-data` | **Auth** | Provide URL and payload for automated form login |
+| `--cookies`, `--headers` | **Auth** | Pass custom session tokens and HTTP headers |
+| `--endpoints FILE` | **Scan** | Load a predefined list of target endpoints from JSON |
+| `--threads`, `--budget` | **Scan** | Adjust concurrency and max request caps |
+| `--rate-limit RPS` | **Scan** | Enforce a strict requests-per-second limit |
+| `--resume` | **Scan** | Resume a halted scan from `checkpoint.json` |
+| `--risk {1,2,3}` | **Config** | Set scan aggressiveness (1=Safe, 3=Aggressive) |
+| `--cdn-mode` | **Config** | Adjust timing thresholds for latency/CDN jitter |
+| `--extract` | **Config** | Enable blind LDAP attribute extraction |
+| `--stateful` | **Evasion** | Exploit second-order injection vulnerabilities |
+| `--mutation-depth N` | **Evasion** | Depth for chained payload mutation (default: 3) |
+| `--output-format` | **Output** | Output findings format (`json` or `sarif`) |
+| `--findings FILE` | **Output** | Customize the JSON handoff output filename |
+| `--audit FILE` | **Output** | Save complete NDJSON audit trail |
 
 ---
 
