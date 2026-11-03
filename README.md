@@ -145,14 +145,6 @@ agent389 https://target.com --stateful --state-delay 3.0
   </a>
 </p>
 
----
-
 <p align="center">
   Built by <b>Project Hellhound</b> &nbsp;·&nbsp; Part of the <a href="https://github.com/project-hellhound-org">Project Hellhound</a> toolkit
-</p>
-
----
-
-<p align="center">
-  <b>Project Hellhound Tactical Unit</b>
 </p>
