@@ -138,18 +138,18 @@ agent389 https://target.com --stateful --state-delay 3.0
 
 ---
 
-## Contributors
+## Author
 
-- **Abinav3ac** (Lead Contributor & Architect)
-
-See the full list of [Contributors](CONTRIBUTORS.md).
+<p align="center">
+    <img src="https://img.shields.io/badge/Founder-ALPH4_X3-c0392b?style=for-the-badge" alt="ALPH4_X3"/>
+  </a>
+</p>
 
 ---
 
-## Author & License
-
-- **Author**: Abinav3ac
-- **License**: Distributed under the GNU General Public License v3.0. See `LICENSE` for details.
+<p align="center">
+  Built by <b>Project Hellhound</b> &nbsp;·&nbsp; Part of the <a href="https://github.com/project-hellhound-org">Project Hellhound</a> toolkit
+</p>
 
 ---
 
